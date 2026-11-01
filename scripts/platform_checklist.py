@@ -26,6 +26,11 @@ def ssense():
         if not allowed(url):
             print("  robots 불허:", url); continue
         page = get(url)
+        if os.environ.get("DEBUG"):
+            for m in list(re.finditer(r"designers/[a-z0-9\-]+", page))[:3]:
+                print("   DEBUG:", page[max(0, m.start()-200):m.end()+200].replace("\n", " "))
+            i = page.find("__NEXT_DATA__"); print("   NEXT_DATA at", i)
+            j = page.find('"designers"'); print("   designers json at", j, page[j:j+300] if j > 0 else "")
         for href, text in re.findall(r'href="(/en-us/(?:women|men)/designers/[a-z0-9\-]+)"[^>]*>\s*([^<]{1,80}?)\s*<', page):
             t = html.unescape(text).strip()
             if t and not t.lower().startswith(("view", "shop")):
@@ -41,7 +46,8 @@ def peek_29cm():
     for m in maps[:2]:
         try:
             body = get(m)
-            print("   ", m, "→", re.findall(r"<loc>([^<]+)</loc>", body)[:8])
+            locs = re.findall(r"<loc>([^<]+)</loc>", body)
+            print("   ", m, "→", len(locs), "개:", [l for l in locs if "item" not in l][:20])
         except Exception as e:
             print("   ", m, "실패", e)
 
