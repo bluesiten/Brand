@@ -1,8 +1,17 @@
-name: 플랫폼 접근 확인 (1회용)
+name: 플랫폼 대조 체크리스트
 on: workflow_dispatch
+permissions:
+  contents: write
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python scripts/check_platforms.py
+      - run: pip install requests openpyxl
+      - run: python scripts/platform_checklist.py
+      - run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add data/checklist_missing.csv
+          git diff --cached --quiet || git commit -m "플랫폼 대조 체크리스트 갱신"
+          git push
