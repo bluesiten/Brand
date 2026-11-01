@@ -632,7 +632,7 @@ def save_csv(rows, path):
             w.writerow([cell(r[c[0]]) for c in COLUMNS])
 
 
-def save_xlsx(rows, dropped, path, stats):
+def save_xlsx(rows, dropped, path, stats, pending=()):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -649,6 +649,7 @@ def save_xlsx(rows, dropped, path, stats):
     ws.append(["※ 인지도 지수 = 그 브랜드 문서가 있는 위키백과 언어판 수 (높을수록 세계적으로 알려짐)"])
     ws.append(["※ '활동중'은 해체일 기록이 없다는 뜻 — 실제로 사라졌는데 기록이 없는 브랜드가 섞여 있을 수 있음"])
     ws.append(["※ '기업(운영사)' 시트: F&F·한섬처럼 브랜드를 운영·유통하는 회사 — 브랜드 목록과 분리"])
+    ws.append(["※ '보강 필요' 시트: 해외 편집숍 대조로 이름만 확인된 브랜드 — 정보 보강 전이라 사이트 데이터엔 미포함"])
     ws.append(["※ '제외됨' 시트: 브랜드가 아니라고 판단해 뺀 항목 — 잘못 빠진 게 있으면 알려주세요"])
     ws.append(["※ 국내 브랜드 추가는 저장소의 seed/korean_brands.csv 에 한 줄씩 적으면 다음 수집 때 반영"])
     ws.append(["※ 이미지는 위키미디어 공용(자유 라이선스) 파일만 연결됨"])
@@ -666,6 +667,7 @@ def save_xlsx(rows, dropped, path, stats):
         *[(c.replace("·", "_")[:31], [r for r in brands if r["category"] == c], COLUMNS) for c in CATEGORIES],
         ("미분류", [r for r in brands if r["category"] == "미분류"], COLUMNS),
         ("기업(운영사)", companies, COLUMNS),
+        ("보강 필요(이름만 확인)", list(pending), [("name", "브랜드명", 30), ("naver_shopping", "네이버쇼핑", 14)]),
         ("제외됨", dropped, DROP_COLUMNS),
     ]
     head_fill = PatternFill("solid", fgColor="111111")
@@ -830,6 +832,11 @@ def main():
             have.add(clean(r["브랜드명"].strip()))
             seed_unmatched_added += 1
 
+    # 플랫폼 대조에서 나왔지만 위키데이터에서도 못 찾은 브랜드명 → 엑셀 검토 시트로만 (사이트 데이터엔 넣지 않음)
+    have_norm = {norm(x) for r in rows for x in (r["name"], r["name_en"], r["name_ko"]) if x}
+    pending = [{"name": r["브랜드명"], "naver_shopping": "https://search.shopping.naver.com/search/all?query=" + quote(r["브랜드명"])}
+               for r in seed if r.get("_checklist") and norm(r["브랜드명"]) not in have_norm]
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     summary = [
         ("브랜드", sum(r["kind"] == "브랜드" for r in rows)),
@@ -841,6 +848,7 @@ def main():
         ("활동중", sum(r["status"] == "활동중" for r in rows)),
         ("사라진 브랜드", sum(r["status"] == "사라짐" for r in rows)),
         ("제외됨(브랜드 아님)", len(dropped)),
+        ("보강 필요(이름만 확인)", len(pending)),
         ("한국어 이름 있음", sum(bool(r["name_ko"]) for r in rows)),
         ("설립연도 있음", sum(bool(r["founded"]) for r in rows)),
         ("공식 사이트 있음", sum(bool(r["website"]) for r in rows)),
@@ -854,7 +862,7 @@ def main():
     with open(os.path.join(OUT, "stats.json"), "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     save_csv(rows, os.path.join(OUT, "brands.csv"))
-    save_xlsx(rows, dropped, os.path.join(OUT, "brands.xlsx"), stats)
+    save_xlsx(rows, dropped, os.path.join(OUT, "brands.xlsx"), stats, pending)
 
     print("완료")
     for k, v in summary:
