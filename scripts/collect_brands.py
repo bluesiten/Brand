@@ -735,6 +735,19 @@ def main():
     rows, dropped = build(ids, props_rows, meta_rows, label_map, source_map,
                           seed_rows, frozenset(ambiguous), frozenset(forced_korean), curated)
 
+    # 같은 브랜드가 여러 항목으로 잡힌 경우(예: 샤넬 회사 / 샤넬 향수 브랜드) 인지도 높은 하나만 남김
+    best = {}
+    for r in rows:  # rows는 인지도 내림차순
+        key = norm(r["name_en"]) if r["name_en"] else r["name"]
+        if key in best:
+            r["drop_reason"] = f"중복({best[key]['name']}와 같은 브랜드)"
+            dropped.append(r)
+        else:
+            best[key] = r
+    rows = list(best.values())
+    # 수동 목록 이름으로 찾았다가 패션이 아니어서 버린 동명 항목은 너무 많아 시트에서 생략
+    dropped = [d for d in dropped if not d["drop_reason"].startswith("수동 목록과 이름만")]
+
     # 위키데이터에 없는 국내 브랜드: 한국어 위키백과 문서만 있는 것 + 수동 목록 미일치
     have = {r["name_ko"] for r in rows} | {r["name"] for r in rows}
     for t in kowiki_no_qid:
