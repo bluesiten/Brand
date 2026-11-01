@@ -14,6 +14,7 @@ GitHub Actions(또는 위키데이터에 접속 가능한 PC)에서 실행:
 import csv
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -285,6 +286,11 @@ def year_of(v):
         return None
 
 
+def clean(name):
+    # '탑텐 (브랜드)' → '탑텐' : 위키백과식 괄호 구분자 제거
+    return re.sub(r"\s*\([^)]*\)$", "", name).strip() or name
+
+
 def commons_url(v):
     # 위키데이터는 이미지를 Special:FilePath URL로 돌려줌
     return v if v.startswith("http") else "https://commons.wikimedia.org/wiki/Special:FilePath/" + quote(v)
@@ -307,7 +313,7 @@ KEEP_TYPE_WORDS = ["brand", "label", "company", "business", "enterprise", "fashi
                    "retail", "manufacturer", "chain", "corporation"]
 FASHION_WORDS = ["fashion", "cloth", "apparel", "wear", "brand", "shoe", "footwear", "eyewear",
                  "패션", "의류", "브랜드", "옷", "신발", "안경", "아웃도어"]
-GROUP_WORDS = ["holding", "conglomerate", "group", "chaebol", "public company", "corporation"]
+GROUP_WORDS = ["holding", "conglomerate", "chaebol", "business group", "corporate group"]
 RETAIL_WORDS = ["retail", "store", "shop", "chain", "e-commerce", "online", "boutique"]
 
 
@@ -365,13 +371,17 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
         name = r.get("name_ko") or r.get("name_en")
         if not name or name == r["id"]:
             continue  # 이름 없는 항목은 아예 버림
+        name = clean(name)
+        if r.get("name_ko"):
+            r["name_ko"] = clean(r["name_ko"])
         type_en = [label_map.get(t, {}).get("en", "") for t in r["type"]]
         hq_korean = any(SOUTH_KOREA in label_map.get(h, {}).get("cty", ()) for h in r["hq"])
         is_korean = (SOUTH_KOREA in r["country"] or SOUTH_KOREA in r["origin"]
                      or hq_korean or r["id"] in forced_korean)
 
         kind, reason = classify(type_en)
-        if r.get("is_class"):
+        brandish = any(w in " ".join(type_en).lower() for w in ("brand", "label", "company", "fashion house"))
+        if r.get("is_class") and not brandish:
             kind, reason = None, "개념·분류 항목(브랜드 아님)"
         elif not r["type"]:
             kind, reason = None, "유형 정보 없음"
