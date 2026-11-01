@@ -134,8 +134,9 @@ def fetch_props(ids):
 
 def fetch_meta(ids):
     q = f"""
-    SELECT ?x ?sl ?en ?ko ?enD ?koD ?kow ?enw WHERE {{
+    SELECT ?x ?sl ?en ?ko ?enD ?koD ?kow ?enw ?isClass WHERE {{
       VALUES ?x {{ {values(ids)} }}
+      BIND(EXISTS {{ ?x wdt:P279 ?sup }} AS ?isClass)
       OPTIONAL {{ ?x wikibase:sitelinks ?sl }}
       OPTIONAL {{ ?x rdfs:label ?en FILTER(lang(?en)="en") }}
       OPTIONAL {{ ?x rdfs:label ?ko FILTER(lang(?ko)="ko") }}
@@ -149,12 +150,128 @@ def fetch_meta(ids):
 
 def fetch_labels(ids):
     q = f"""
-    SELECT ?x ?en ?ko WHERE {{
+    SELECT ?x ?en ?ko ?cty WHERE {{
       VALUES ?x {{ {values(ids)} }}
       OPTIONAL {{ ?x rdfs:label ?en FILTER(lang(?en)="en") }}
       OPTIONAL {{ ?x rdfs:label ?ko FILTER(lang(?ko)="ko") }}
+      OPTIONAL {{ ?x wdt:P17 ?cty }}
     }}"""
     return sparql(q)
+
+
+# ---------------------------------------------------------------- 국내 브랜드 보강
+KOWIKI_API = "https://ko.wikipedia.org/w/api.php"
+SEED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "seed", "korean_brands.csv")
+KO_CAT_SEARCH = ["대한민국의 의류 브랜드", "대한민국의 패션 브랜드", "대한민국의 의류 회사",
+                 "대한민국의 패션 회사", "대한민국의 신발 브랜드", "대한민국의 스포츠웨어", "대한민국의 패션"]
+KO_CAT_MUST = ("대한민국", "한국")
+KO_CAT_ANY = ("의류", "패션", "브랜드", "신발", "스포츠웨어", "아웃도어", "잡화")
+KO_CAT_BAN = ("인물", "디자이너", "모델", "잡지", "방송", "음악", "가수", "배우", "식품", "화장품", "자동차", "전자")
+
+
+def kowiki(params):
+    params = {**params, "format": "json", "formatversion": 2}
+    for i in range(4):
+        try:
+            r = session.get(KOWIKI_API, params=params, timeout=60)
+            if r.status_code == 200:
+                return r.json()
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(5 * (i + 1))
+    return {}
+
+
+def korean_categories():
+    found = set()
+    for kw in KO_CAT_SEARCH:
+        res = kowiki({"action": "query", "list": "search", "srsearch": kw,
+                      "srnamespace": 14, "srlimit": 50})
+        for h in res.get("query", {}).get("search", []):
+            t = h["title"]
+            if any(m in t for m in KO_CAT_MUST) and any(a in t for a in KO_CAT_ANY) \
+                    and not any(b in t for b in KO_CAT_BAN):
+                found.add(t)
+    return sorted(found)
+
+
+def category_pages(cats, depth=2):
+    pages, seen, frontier = set(), set(), list(cats)
+    for _ in range(depth + 1):
+        nxt = []
+        for c in frontier:
+            if c in seen:
+                continue
+            seen.add(c)
+            cont = {}
+            while True:
+                res = kowiki({"action": "query", "list": "categorymembers", "cmtitle": c,
+                              "cmlimit": 500, "cmnamespace": "0|14", **cont})
+                for m in res.get("query", {}).get("categorymembers", []):
+                    if m["ns"] == 0:
+                        pages.add(m["title"])
+                    elif not any(b in m["title"] for b in KO_CAT_BAN):
+                        nxt.append(m["title"])
+                if "continue" not in res:
+                    break
+                cont = res["continue"]
+        frontier = nxt
+    return pages
+
+
+def titles_to_qids(titles):
+    out = {}
+    for part in chunks(sorted(titles), 50):
+        res = kowiki({"action": "query", "prop": "pageprops", "ppprop": "wikibase_item",
+                      "titles": "|".join(part), "redirects": 1})
+        for p in res.get("query", {}).get("pages", []):
+            q = p.get("pageprops", {}).get("wikibase_item")
+            if q:
+                out[p["title"]] = q
+        time.sleep(0.3)
+    return out
+
+
+def read_seed():
+    if not os.path.exists(SEED_FILE):
+        return []
+    with open(SEED_FILE, encoding="utf-8-sig") as f:
+        return [r for r in csv.DictReader(f) if (r.get("브랜드명") or "").strip()]
+
+
+def match_seed(seed):
+    """시드 브랜드명을 위키데이터 한국어/영어 이름과 정확히 맞춰본다."""
+    names = set()
+    for r in seed:
+        names.add((r["브랜드명"].strip(), "ko"))
+        if (r.get("영문명") or "").strip():
+            names.add((r["영문명"].strip(), "en"))
+    hits = {}
+    for part in chunks(sorted(names), 80):
+        vals = " ".join('"{}"@{}'.format(n.replace('"', ''), l) for n, l in part)
+        q = f"""
+        SELECT DISTINCT ?x ?l WHERE {{
+          VALUES ?l {{ {vals} }}
+          ?x rdfs:label ?l .
+          ?x wdt:P31 ?t .
+          FILTER NOT EXISTS {{ ?x wdt:P31 wd:Q5 }}
+          FILTER NOT EXISTS {{ ?x wdt:P31 wd:Q4167410 }}
+        }}"""
+        for b in sparql(q):
+            hits.setdefault(b["l"]["value"], set()).add(qid(b["x"]["value"]))
+        time.sleep(0.5)
+    matched, unmatched = {}, []
+    for r in seed:
+        cand = hits.get(r["브랜드명"].strip(), set()) | hits.get((r.get("영문명") or "").strip(), set())
+        if len(cand) == 1:
+            matched[next(iter(cand))] = r
+        elif cand:
+            # 이름이 같은 항목이 여럿이면 한국 관련 후보를 나중에 고르도록 모두 넘김
+            for c in cand:
+                matched.setdefault(c, {**r, "_ambiguous": True})
+        else:
+            unmatched.append(r)
+    return matched, unmatched
 
 
 # ---------------------------------------------------------------- 가공
@@ -173,7 +290,47 @@ def commons_url(v):
     return v if v.startswith("http") else "https://commons.wikimedia.org/wiki/Special:FilePath/" + quote(v)
 
 
-def build(ids, props_rows, meta_rows, label_map, source_map):
+# 유형(P31) 영어 이름에 이런 말이 있으면 '브랜드 아님'으로 제외
+EXCLUDE_TYPE_WORDS = [
+    "agency", "magazine", "periodical", "newspaper", "publisher", "school", "university",
+    "college", "academy", "museum", "award", "prize", "festival", "fashion week", "trade fair",
+    "exhibition", "television", "film", "human", "shopping mall", "shopping center",
+    "shopping centre", "department store", "market", "academic", "profession", "occupation",
+    "association", "trade union", "nonprofit", "non-profit", "foundation", "competition",
+    "event", "website", "blog", "photograph", "artwork", "collection", "style", "movement",
+    "subculture", "garment", "clothing", "textile fiber", "family name", "given name",
+    "sports club", "football club", "team", "song", "album", "musical group", "video game",
+    "industry", "discipline", "concept", "activity", "field of study", "art form", "product category",
+]
+# 이 말이 있으면 위 단어가 있어도 살림 (예: 'clothing brand', 'clothing company')
+KEEP_TYPE_WORDS = ["brand", "label", "company", "business", "enterprise", "fashion house",
+                   "retail", "manufacturer", "chain", "corporation"]
+FASHION_WORDS = ["fashion", "cloth", "apparel", "wear", "brand", "shoe", "footwear", "eyewear",
+                 "패션", "의류", "브랜드", "옷", "신발", "안경", "아웃도어"]
+GROUP_WORDS = ["holding", "conglomerate", "group", "chaebol", "public company", "corporation"]
+RETAIL_WORDS = ["retail", "store", "shop", "chain", "e-commerce", "online", "boutique"]
+
+
+def classify(type_labels_en):
+    t = [s.lower() for s in type_labels_en]
+    joined = " | ".join(t)
+    if t:
+        bad = [w for w in EXCLUDE_TYPE_WORDS if w in joined]
+        good = any(k in joined for k in KEEP_TYPE_WORDS)
+        if bad and not good:
+            return None, "유형이 브랜드 아님: " + ", ".join(bad[:3])
+    if any(w in joined for w in ["brand", "label", "fashion house"]):
+        return "브랜드", ""
+    if any(w in joined for w in RETAIL_WORDS):
+        return "리테일·편집숍", ""
+    if any(w in joined for w in GROUP_WORDS):
+        return "기업·그룹", ""
+    return "브랜드", ""
+
+
+def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
+          ambiguous=frozenset(), forced_korean=frozenset()):
+    seed_rows = seed_rows or {}
     recs = {i: {"id": i, **{k: [] for k in PROPS.values()}} for i in ids}
 
     for b in props_rows:
@@ -194,37 +351,57 @@ def build(ids, props_rows, meta_rows, label_map, source_map):
         r = recs[x]
         g = lambda k: b.get(k, {}).get("value")
         r["sitelinks"] = int(g("sl") or 0)
-        r["name_en"] = r.get("name_en") or g("en")
-        r["name_ko"] = r.get("name_ko") or g("ko")
-        r["desc_en"] = r.get("desc_en") or g("enD")
-        r["desc_ko"] = r.get("desc_ko") or g("koD")
-        r["kowiki"] = r.get("kowiki") or g("kow")
-        r["enwiki"] = r.get("enwiki") or g("enw")
+        r["is_class"] = r.get("is_class") or g("isClass") == "true"
+        for k, src in (("name_en", "en"), ("name_ko", "ko"), ("desc_en", "enD"),
+                       ("desc_ko", "koD"), ("kowiki", "kow"), ("enwiki", "enw")):
+            r[k] = r.get(k) or g(src)
 
     def lab(q):
         l = label_map.get(q, {})
         return l.get("ko") or l.get("en") or q
 
-    out = []
+    kept, dropped = [], []
     for r in recs.values():
         name = r.get("name_ko") or r.get("name_en")
         if not name or name == r["id"]:
-            continue  # 이름 없는 항목 제외
+            continue  # 이름 없는 항목은 아예 버림
+        type_en = [label_map.get(t, {}).get("en", "") for t in r["type"]]
+        hq_korean = any(SOUTH_KOREA in label_map.get(h, {}).get("cty", ()) for h in r["hq"])
+        is_korean = (SOUTH_KOREA in r["country"] or SOUTH_KOREA in r["origin"]
+                     or hq_korean or r["id"] in forced_korean)
+
+        kind, reason = classify(type_en)
+        if r.get("is_class"):
+            kind, reason = None, "개념·분류 항목(브랜드 아님)"
+        elif not r["type"]:
+            kind, reason = None, "유형 정보 없음"
+        if r["id"] in ambiguous:
+            # 수동 목록 이름으로 찾은 항목: 다른 경로로도 잡혔거나, 한국 항목이거나, 설명이 패션 관련이어야 인정
+            other_src = any(s != "수동 목록" for s in source_map.get(r["id"], ()))
+            d = ((r.get("desc_en") or "") + " " + (r.get("desc_ko") or "")).lower()
+            fashionish = any(w in d for w in FASHION_WORDS)
+            if other_src or fashionish:
+                is_korean = True
+            elif not is_korean:
+                kind, reason = None, "수동 목록과 이름만 같은 항목(패션 아님)"
+
         inc = sorted(y for y in (year_of(v) for v in r["inception"]) if y)
         dis = sorted(y for y in (year_of(v) for v in r["dissolved"]) if y)
         countries = r["country"] or r["origin"]
-        search_name = r.get("name_en") or name
-        out.append({
+        search_name = r.get("name_ko") if is_korean and r.get("name_ko") else (r.get("name_en") or name)
+        seed = seed_rows.get(r["id"])
+        rec = {
             "id": r["id"],
             "name": name,
             "name_en": r.get("name_en") or "",
             "name_ko": r.get("name_ko") or "",
-            "desc": r.get("desc_ko") or r.get("desc_en") or "",
-            "country": [lab(c) for c in countries],
-            "is_korean": SOUTH_KOREA in r["country"] or SOUTH_KOREA in r["origin"],
+            "kind": kind or "",
+            "desc": r.get("desc_ko") or r.get("desc_en") or (seed or {}).get("메모", ""),
+            "country": [lab(c) for c in countries] or (["대한민국"] if is_korean else []),
+            "is_korean": is_korean,
             "founded": inc[0] if inc else None,
             "dissolved": dis[-1] if dis else None,
-            "status": "사라짐" if (r["dissolved"]) else "활동중",
+            "status": "사라짐" if r["dissolved"] else "활동중",
             "parent": [lab(p) for p in (r["parent"] or r["owner"])],
             "founder": [lab(f) for f in r["founder"]],
             "hq": [lab(h) for h in r["hq"]],
@@ -239,22 +416,49 @@ def build(ids, props_rows, meta_rows, label_map, source_map):
             "naver_shopping": "https://search.shopping.naver.com/search/all?query=" + quote(search_name),
             "fame": r.get("sitelinks", 0),  # 위키백과 언어판 수 = 인지도 지수
             "found_via": sorted(source_map.get(r["id"], [])),
-        })
-    out.sort(key=lambda d: (-d["fame"], d["name"]))
-    return out
+            "source": "위키데이터",
+        }
+        if kind:
+            kept.append(rec)
+        else:
+            rec["drop_reason"] = reason
+            dropped.append(rec)
+    kept.sort(key=lambda d: (-d["fame"], d["name"]))
+    dropped.sort(key=lambda d: (-d["fame"], d["name"]))
+    return kept, dropped
+
+
+def manual_record(r, kowiki_url=""):
+    name = r["브랜드명"].strip()
+    en = (r.get("영문명") or "").strip()
+    return {
+        "id": "", "name": name, "name_en": en, "name_ko": name,
+        "kind": (r.get("구분") or "브랜드").strip(),
+        "desc": (r.get("메모") or "").strip(), "country": ["대한민국"], "is_korean": True,
+        "founded": int(r["설립"]) if (r.get("설립") or "").strip().isdigit() else None,
+        "dissolved": int(r["사라진 해"]) if (r.get("사라진 해") or "").strip().isdigit() else None,
+        "status": "사라짐" if (r.get("사라진 해") or "").strip() else "활동중",
+        "parent": [], "founder": [], "hq": [], "type": [],
+        "website": (r.get("공식 사이트") or "").strip(), "instagram": "", "logo": "", "image": "",
+        "kowiki": kowiki_url, "enwiki": "", "wikidata": "",
+        "naver_shopping": "https://search.shopping.naver.com/search/all?query=" + quote(name),
+        "fame": 0, "found_via": ["수동 목록"] if not kowiki_url else ["한국어 위키백과"],
+        "source": "수동 목록" if not kowiki_url else "한국어 위키백과",
+    }
 
 
 # ---------------------------------------------------------------- 저장
 COLUMNS = [
-    ("name", "브랜드명", 26), ("name_en", "영문명", 26), ("status", "상태", 8),
-    ("founded", "설립", 7), ("dissolved", "사라진 해", 9), ("country", "국가", 14),
-    ("parent", "모회사·소유", 22), ("founder", "창립자", 22), ("desc", "설명", 40),
-    ("fame", "인지도 지수", 10), ("website", "공식 사이트", 30),
+    ("name", "브랜드명", 26), ("name_en", "영문명", 26), ("kind", "구분", 12),
+    ("status", "상태", 8), ("founded", "설립", 7), ("dissolved", "사라진 해", 9),
+    ("country", "국가", 14), ("parent", "모회사·소유", 22), ("founder", "창립자", 22),
+    ("desc", "설명", 40), ("fame", "인지도 지수", 10), ("website", "공식 사이트", 30),
     ("naver_shopping", "네이버쇼핑", 14), ("instagram", "인스타그램", 14),
     ("kowiki", "한국어 위키백과", 14), ("enwiki", "영어 위키백과", 14),
     ("wikidata", "위키데이터", 14), ("image", "이미지(자유 라이선스)", 14),
-    ("found_via", "수집 경로", 24), ("id", "ID", 10),
+    ("source", "출처", 12), ("found_via", "수집 경로", 24), ("id", "ID", 10),
 ]
+DROP_COLUMNS = [("drop_reason", "제외 이유", 30), ("type", "위키데이터 유형", 30)] + COLUMNS
 LINK_COLS = {"website", "naver_shopping", "instagram", "kowiki", "enwiki", "wikidata", "image"}
 
 
@@ -272,14 +476,14 @@ def save_csv(rows, path):
             w.writerow([cell(r[c[0]]) for c in COLUMNS])
 
 
-def save_xlsx(rows, path, stats):
+def save_xlsx(rows, dropped, path, stats):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
 
     wb = Workbook()
     ws = wb.active
     ws.title = "요약"
-    ws.append(["패션 브랜드 아카이브 — 위키데이터 수집 결과"])
+    ws.append(["패션 브랜드 아카이브 — 수집 결과"])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([f"수집일: {stats['collected_at']}"])
     ws.append([])
@@ -287,33 +491,36 @@ def save_xlsx(rows, path, stats):
         ws.append([k, v])
     ws.append([])
     ws.append(["※ 인지도 지수 = 그 브랜드 문서가 있는 위키백과 언어판 수 (높을수록 세계적으로 알려짐)"])
-    ws.append(["※ '활동중'은 위키데이터에 해체일이 없다는 뜻 — 실제로 사라졌는데 기록이 없는 브랜드가 섞여 있을 수 있음"])
+    ws.append(["※ '활동중'은 해체일 기록이 없다는 뜻 — 실제로 사라졌는데 기록이 없는 브랜드가 섞여 있을 수 있음"])
+    ws.append(["※ '제외됨' 시트: 브랜드가 아니라고 판단해 뺀 항목 — 잘못 빠진 게 있으면 알려주세요"])
+    ws.append(["※ 국내 브랜드 추가는 저장소의 seed/korean_brands.csv 에 한 줄씩 적으면 다음 수집 때 반영"])
     ws.append(["※ 이미지는 위키미디어 공용(자유 라이선스) 파일만 연결됨"])
     ws.column_dimensions["A"].width = 40
     ws.column_dimensions["B"].width = 14
 
     sheets = [
-        ("전체", rows),
-        ("활동중", [r for r in rows if r["status"] == "활동중"]),
+        ("전체", rows, COLUMNS),
+        ("국내 브랜드", [r for r in rows if r["is_korean"]], COLUMNS),
+        ("활동중", [r for r in rows if r["status"] == "활동중"], COLUMNS),
         ("사라진 브랜드", sorted([r for r in rows if r["status"] == "사라짐"],
-                             key=lambda r: -(r["dissolved"] or 0))),
-        ("국내 브랜드", [r for r in rows if r["is_korean"]]),
+                             key=lambda r: -(r["dissolved"] or 0)), COLUMNS),
+        ("제외됨", dropped, DROP_COLUMNS),
     ]
     head_fill = PatternFill("solid", fgColor="111111")
-    for title, data in sheets:
+    for title, data, cols in sheets:
         s = wb.create_sheet(title)
-        s.append([c[1] for c in COLUMNS])
-        for i, c in enumerate(COLUMNS, 1):
+        s.append([c[1] for c in cols])
+        for i, c in enumerate(cols, 1):
             h = s.cell(row=1, column=i)
             h.font = Font(bold=True, color="FFFFFF")
             h.fill = head_fill
             h.alignment = Alignment(vertical="center")
             s.column_dimensions[h.column_letter].width = c[2]
         for r in data:
-            s.append([cell(r[c[0]]) for c in COLUMNS])
+            s.append([cell(r.get(c[0])) for c in cols])
             row = s.max_row
-            for i, c in enumerate(COLUMNS, 1):
-                if c[0] in LINK_COLS and r[c[0]]:
+            for i, c in enumerate(cols, 1):
+                if c[0] in LINK_COLS and r.get(c[0]):
                     x = s.cell(row=row, column=i)
                     x.hyperlink = r[c[0]]
                     x.value = "열기"
@@ -356,6 +563,33 @@ def main():
         for i in got:
             source_map.setdefault(i, set()).add("업종:" + l)
         time.sleep(1)
+
+    print("2-1) 국내 브랜드 보강 — 한국어 위키백과 분류", flush=True)
+    forced_korean = set()
+    kowiki_no_qid = []
+    try:
+        cats = korean_categories()
+        print("   찾은 분류:", cats, flush=True)
+        titles = category_pages(cats)
+        t2q = titles_to_qids(titles)
+        print(f"   문서 {len(titles)}개 → 위키데이터 연결 {len(t2q)}개", flush=True)
+        for t, q in t2q.items():
+            source_map.setdefault(q, set()).add("한국어 위키백과 분류")
+            forced_korean.add(q)
+        kowiki_no_qid = sorted(set(titles) - set(t2q))
+    except Exception as e:  # 보강 실패해도 본 수집은 계속
+        print("   ! 한국어 위키백과 보강 실패:", e)
+
+    print("2-2) 국내 브랜드 보강 — 수동 목록(seed/korean_brands.csv)", flush=True)
+    seed = read_seed()
+    seed_rows, ambiguous, unmatched = {}, set(), []
+    if seed:
+        matched, unmatched = match_seed(seed)
+        for q, r in matched.items():
+            source_map.setdefault(q, set()).add("수동 목록")
+            seed_rows[q] = r
+            ambiguous.add(q)  # 진짜 그 브랜드인지 build()에서 확인
+        print(f"   목록 {len(seed)}개 → 위키데이터 일치 {len(seed) - len(unmatched)}개, 미일치 {len(unmatched)}개")
     ids = sorted(source_map)
     print(f"   합계(중복 제거): {len(ids)}개", flush=True)
 
@@ -368,7 +602,7 @@ def main():
             print(f"   {n * BATCH}/{len(ids)}", flush=True)
         time.sleep(0.5)
 
-    print("4) 국가·모회사·창립자 이름 붙이기", flush=True)
+    print("4) 국가·모회사·창립자·유형 이름 붙이기", flush=True)
     ref = set()
     for b in props_rows:
         key = PROPS.get(qid(b["p"]["value"]))
@@ -378,19 +612,41 @@ def main():
     for part in chunks(sorted(ref), 300):
         for b in fetch_labels(part):
             x = qid(b["x"]["value"])
-            d = label_map.setdefault(x, {})
+            d = label_map.setdefault(x, {"cty": set()})
             for lang in ("en", "ko"):
                 if lang in b:
                     d[lang] = b[lang]["value"]
+            if "cty" in b:
+                d["cty"].add(qid(b["cty"]["value"]))
         time.sleep(0.5)
 
-    rows = build(ids, props_rows, meta_rows, label_map, source_map)
+    rows, dropped = build(ids, props_rows, meta_rows, label_map, source_map,
+                          seed_rows, frozenset(ambiguous), frozenset(forced_korean))
+
+    # 위키데이터에 없는 국내 브랜드: 한국어 위키백과 문서만 있는 것 + 수동 목록 미일치
+    have = {r["name_ko"] for r in rows} | {r["name"] for r in rows}
+    for t in kowiki_no_qid:
+        if t not in have:
+            rows.append(manual_record({"브랜드명": t}, "https://ko.wikipedia.org/wiki/" + quote(t)))
+            have.add(t)
+    seed_unmatched_added = 0
+    for r in seed:  # 위키데이터에서 확인 못 한 수동 목록 브랜드는 그대로 추가
+        if r["브랜드명"].strip() not in have and (r.get("영문명") or "").strip() not in {x["name_en"] for x in rows if x["is_korean"]}:
+            rows.append(manual_record(r))
+            have.add(r["브랜드명"].strip())
+            seed_unmatched_added += 1
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     summary = [
         ("전체 브랜드", len(rows)),
+        ("  └ 브랜드", sum(r["kind"] == "브랜드" for r in rows)),
+        ("  └ 리테일·편집숍", sum(r["kind"] == "리테일·편집숍" for r in rows)),
+        ("  └ 기업·그룹", sum(r["kind"] == "기업·그룹" for r in rows)),
+        ("국내 브랜드", sum(r["is_korean"] for r in rows)),
+        ("  └ 수동 목록에서만 추가(위키 정보 없음)", seed_unmatched_added),
         ("활동중", sum(r["status"] == "활동중" for r in rows)),
         ("사라진 브랜드", sum(r["status"] == "사라짐" for r in rows)),
-        ("국내 브랜드", sum(r["is_korean"] for r in rows)),
+        ("제외됨(브랜드 아님)", len(dropped)),
         ("한국어 이름 있음", sum(bool(r["name_ko"]) for r in rows)),
         ("설립연도 있음", sum(bool(r["founded"]) for r in rows)),
         ("공식 사이트 있음", sum(bool(r["website"]) for r in rows)),
@@ -404,7 +660,7 @@ def main():
     with open(os.path.join(OUT, "stats.json"), "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     save_csv(rows, os.path.join(OUT, "brands.csv"))
-    save_xlsx(rows, os.path.join(OUT, "brands.xlsx"), stats)
+    save_xlsx(rows, dropped, os.path.join(OUT, "brands.xlsx"), stats)
 
     print("완료")
     for k, v in summary:
