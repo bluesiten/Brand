@@ -1,0 +1,8 @@
+name: 플랫폼 접근 확인 (1회용)
+on: workflow_dispatch
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python scripts/check_platforms.py
