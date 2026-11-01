@@ -236,6 +236,19 @@ def titles_to_qids(titles):
 GLOBAL_SEED_FILE = os.path.join(os.path.dirname(SEED_FILE), "global_brands.csv")
 
 
+def titles_extracts(titles):
+    """한국어 위키백과 문서 첫 문장(요약) — 위키데이터 설명이 없는 국내 항목 판별용"""
+    out = {}
+    for part in chunks(sorted(titles), 20):
+        res = kowiki({"action": "query", "prop": "extracts", "exintro": 1, "explaintext": 1,
+                      "exsentences": 2, "titles": "|".join(part), "redirects": 1})
+        for p in res.get("query", {}).get("pages", []):
+            if p.get("extract"):
+                out[p["title"]] = p["extract"].strip()[:300]
+        time.sleep(0.3)
+    return out
+
+
 def read_seed():
     rows = []
     if os.path.exists(SEED_FILE):
@@ -353,7 +366,8 @@ PLATFORM_WORDS = ["online shop", "online store", "online retailer", "online plat
                   "ecommerce", "marketplace", "open market", "department store", "online fashion",
                   "온라인 상점", "온라인 쇼핑", "쇼핑몰", "오픈 마켓", "백화점", "편집숍", "multi-brand",
                   "outlet", "duty-free", "duty free", "mail order", "off-price", "sporting goods retailer",
-                  "shoe retailer", "footwear retailer", "department-store"]
+                  "shoe retailer", "footwear retailer", "department-store", "중고 거래", "중고거래",
+                  "거래 앱", "거래 플랫폼", "모델 에이전시", "secondhand", "second-hand", "resale"]
 CATEGORIES = ["럭셔리", "컨템포러리·디자이너", "캐주얼", "SPA·패스트패션", "스트리트", "스포츠", "아웃도어",
               "클래식·테일러링", "데님·워크웨어", "신발", "잡화·주얼리", "언더웨어·스윔", "키즈"]
 # 수동 지정이 없는 브랜드는 유형·업종·설명의 단어로 추정 (위에서부터 먼저 걸리는 것)
@@ -403,7 +417,7 @@ def guess_category(text):
 
 
 def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
-          ambiguous=frozenset(), forced_korean=frozenset(), curated=None):
+          ambiguous=frozenset(), forced_korean=frozenset(), curated=None, ko_extract=None):
     seed_rows = seed_rows or {}
     curated = curated or {}
     recs = {i: {"id": i, **{k: [] for k in PROPS.values()}} for i in ids}
@@ -434,6 +448,10 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
     def lab(q):
         l = label_map.get(q, {})
         return l.get("ko") or l.get("en") or q
+
+    for q, ex in (ko_extract or {}).items():
+        if q in recs and not recs[q].get("desc_ko"):
+            recs[q]["desc_ko"] = ex
 
     kept, dropped = [], []
     for r in recs.values():
@@ -544,12 +562,18 @@ def manual_record(r, kowiki_url="", curated=None):
     name = clean(raw)
     en = (r.get("영문명") or "").strip()
     cat = (r.get("카테고리") or (curated or {}).get(name) or "").strip()
-    is_company = cat in ("그룹", "기업") or (not cat and any(w in raw for w in KO_COMPANY_NAME))
+    memo = (r.get("메모") or "").lower()
+    brand_word = "브랜드" in memo or "brand" in memo
+    is_company = cat in ("그룹", "기업") or (not cat and (any(w in raw for w in KO_COMPANY_NAME) or
+                                                       (not brand_word and any(w in memo for w in KO_COMPANY_DESC))))
+    if not cat and not is_company and memo:
+        g = guess_category(memo)
+        cat = "" if g == "미분류" else g
     return {
         "id": "", "name": name, "name_en": en, "name_ko": name,
         "kind": COMPANY if is_company else "브랜드",
         "category": "" if is_company else (cat or "미분류"),
-        "category_source": "수동" if cat and not is_company else "",
+        "category_source": ("수동" if (r.get("카테고리") or (curated or {}).get(name)) else "추정") if cat and not is_company else "",
         "desc": (r.get("메모") or "").strip(), "country": ["대한민국"], "is_korean": True,
         "founded": int(r["설립"]) if (r.get("설립") or "").strip().isdigit() else None,
         "dissolved": int(r["사라진 해"]) if (r.get("사라진 해") or "").strip().isdigit() else None,
@@ -690,6 +714,7 @@ def main():
     print("2-1) 국내 브랜드 보강 — 한국어 위키백과 분류", flush=True)
     forced_korean = set()
     kowiki_no_qid = []
+    extracts, ko_extract = {}, {}
     try:
         cats = korean_categories()
         print("   찾은 분류:", cats, flush=True)
@@ -700,6 +725,11 @@ def main():
             source_map.setdefault(q, set()).add("한국어 위키백과 분류")
             forced_korean.add(q)
         kowiki_no_qid = sorted(set(titles) - set(t2q))
+        extracts = titles_extracts(titles)
+        print(f"   위키백과 요약 {len(extracts)}개 확보", flush=True)
+        for t, q in t2q.items():
+            if t in extracts:
+                ko_extract[q] = extracts[t]
     except Exception as e:  # 보강 실패해도 본 수집은 계속
         print("   ! 한국어 위키백과 보강 실패:", e)
 
@@ -752,7 +782,7 @@ def main():
         time.sleep(0.5)
 
     rows, dropped = build(ids, props_rows, meta_rows, label_map, source_map,
-                          seed_rows, frozenset(ambiguous), frozenset(forced_korean), curated)
+                          seed_rows, frozenset(ambiguous), frozenset(forced_korean), curated, ko_extract)
 
     # 같은 브랜드가 여러 항목으로 잡힌 경우(예: 샤넬 회사 / 샤넬 향수 브랜드) 인지도 높은 하나만 남김
     best = {}
@@ -770,8 +800,10 @@ def main():
     # 위키데이터에 없는 국내 브랜드: 한국어 위키백과 문서만 있는 것 + 수동 목록 미일치
     have = {r["name_ko"] for r in rows} | {r["name"] for r in rows}
     for t in kowiki_no_qid:
-        if clean(t) not in have and curated.get(clean(t)) != "제외":
-            rows.append(manual_record({"브랜드명": t}, "https://ko.wikipedia.org/wiki/" + quote(t), curated))
+        ex = extracts.get(t, "").lower()
+        if clean(t) not in have and curated.get(clean(t)) != "제외" and not any(w in ex for w in PLATFORM_WORDS):
+            rows.append(manual_record({"브랜드명": t, "메모": extracts.get(t, "")},
+                                      "https://ko.wikipedia.org/wiki/" + quote(t), curated))
             have.add(clean(t))
     seed_unmatched_added = 0
     for r in seed:  # 위키데이터에서 확인 못 한 국내 수동 목록 브랜드는 그대로 추가
