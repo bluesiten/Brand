@@ -26,12 +26,7 @@ def ssense():
         if not allowed(url):
             print("  robots 불허:", url); continue
         page = get(url)
-        if os.environ.get("DEBUG"):
-            for m in list(re.finditer(r"designers/[a-z0-9\-]+", page))[:3]:
-                print("   DEBUG:", page[max(0, m.start()-200):m.end()+200].replace("\n", " "))
-            i = page.find("__NEXT_DATA__"); print("   NEXT_DATA at", i)
-            j = page.find('"designers"'); print("   designers json at", j, page[j:j+300] if j > 0 else "")
-        for href, text in re.findall(r'href="(/en-us/(?:women|men)/designers/[a-z0-9\-]+)"[^>]*>\s*([^<]{1,80}?)\s*<', page):
+        for href, text in re.findall(r'href="(/en-us/(?:women|men)/designers/[a-z0-9\-]+)"[^>]*>\s*<span[^>]*>([^<]{1,80})</span>', page):
             t = html.unescape(text).strip()
             if t and not t.lower().startswith(("view", "shop")):
                 names[t] = "https://www.ssense.com" + href
@@ -60,11 +55,6 @@ def main():
                 have.add(norm(n))
     print("1) SSENSE 디자이너 목록")
     ss = ssense()
-    print("2) 29CM 사이트맵 구조 확인")
-    try:
-        peek_29cm()
-    except Exception as e:
-        print("  실패", e)
     rows = []
     for n, url in sorted(ss.items(), key=lambda x: x[0].lower()):
         rows.append({"플랫폼": "SSENSE", "브랜드명": n, "우리 데이터": "있음" if norm(n) in have else "없음", "링크": url})
