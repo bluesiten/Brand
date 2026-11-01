@@ -848,6 +848,8 @@ def main():
             site = o["공식 사이트"]
             text = (o.get("사이트 제목", "") + " | " + o.get("소개", "")).lower()
             cat = curated.get(norm(n)) or guess_category(text)
+            if cat == "미분류":
+                cat = "컨템포러리·디자이너"  # 해외 디자이너 편집숍 대조로 찾은 브랜드라 기본값으로 추정
             rows.append({**manual_record({"브랜드명": n, "영문명": n, "메모": o.get("소개", ""), "카테고리": cat if cat != "미분류" else "",
                                           "공식 사이트": site}),
                          "country": [], "is_korean": ".kr/" in site + "/" or site.rstrip("/").endswith(".kr")
