@@ -1,0 +1,49 @@
+{
+  "collected_at": "2026-11-01 07:19 UTC",
+  "summary": [
+    [
+      "전체 브랜드",
+      2328
+    ],
+    [
+      "활동중",
+      2175
+    ],
+    [
+      "사라진 브랜드",
+      153
+    ],
+    [
+      "국내 브랜드",
+      19
+    ],
+    [
+      "한국어 이름 있음",
+      282
+    ],
+    [
+      "설립연도 있음",
+      1627
+    ],
+    [
+      "공식 사이트 있음",
+      1655
+    ],
+    [
+      "이미지 있음",
+      715
+    ]
+  ],
+  "classes": {
+    "Q1618899": "fashion label",
+    "Q1941779": "fashion house",
+    "Q135409642": "luxury brand",
+    "Q133459332": "clothing brand"
+  },
+  "industries": {
+    "Q11828862": "clothing industry",
+    "Q5915560": "footwear industry",
+    "Q12684": "fashion",
+    "Q29583": "fashion design"
+  }
+}
