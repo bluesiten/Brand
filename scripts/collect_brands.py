@@ -256,6 +256,14 @@ def read_seed():
             for r in csv.DictReader(f):
                 if (r.get("브랜드명") or "").strip():
                     rows.append({**r, "_korean": True})
+    # 플랫폼 대조 체크리스트에서 '우리 데이터에 없음'으로 나온 브랜드명 → 위키데이터에서 찾아보기
+    chk = os.path.join(os.path.dirname(os.path.dirname(SEED_FILE)), "data", "checklist_missing.csv")
+    if os.path.exists(chk):
+        with open(chk, encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f):
+                n = (r.get("브랜드명") or "").strip()
+                if n and r.get("우리 데이터") == "없음":
+                    rows.append({"브랜드명": n, "영문명": n, "카테고리": "", "_korean": False, "_checklist": True})
     if os.path.exists(GLOBAL_SEED_FILE):
         with open(GLOBAL_SEED_FILE, encoding="utf-8-sig") as f:
             for r in csv.DictReader(f):
@@ -281,11 +289,15 @@ def norm(name):
 
 def match_seed(seed):
     """시드 브랜드명을 위키데이터 한국어/영어 이름과 정확히 맞춰본다."""
+    def variants(n):
+        # 플랫폼은 'AURALEE'처럼 대문자로 쓰는 경우가 많아 표기 변형도 같이 찾음
+        return {n, n.title(), n.lower(), n.upper(), n[:1].upper() + n[1:].lower()}
     names = set()
     for r in seed:
         names.add((r["브랜드명"].strip(), "ko"))
         if (r.get("영문명") or "").strip():
-            names.add((r["영문명"].strip(), "en"))
+            for v in variants(r["영문명"].strip()):
+                names.add((v, "en"))
     hits = {}
     for part in chunks(sorted(names), 80):
         vals = " ".join('"{}"@{}'.format(n.replace('"', ''), l) for n, l in part)
@@ -302,7 +314,10 @@ def match_seed(seed):
         time.sleep(0.5)
     matched, unmatched = {}, []
     for r in seed:
-        cand = hits.get(r["브랜드명"].strip(), set()) | hits.get((r.get("영문명") or "").strip(), set())
+        cand = set(hits.get(r["브랜드명"].strip(), set()))
+        if (r.get("영문명") or "").strip():
+            for v in variants(r["영문명"].strip()):
+                cand |= hits.get(v, set())
         if len(cand) == 1:
             matched[next(iter(cand))] = r
         elif cand:
