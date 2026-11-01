@@ -233,11 +233,37 @@ def titles_to_qids(titles):
     return out
 
 
+GLOBAL_SEED_FILE = os.path.join(os.path.dirname(SEED_FILE), "global_brands.csv")
+
+
 def read_seed():
-    if not os.path.exists(SEED_FILE):
-        return []
-    with open(SEED_FILE, encoding="utf-8-sig") as f:
-        return [r for r in csv.DictReader(f) if (r.get("브랜드명") or "").strip()]
+    rows = []
+    if os.path.exists(SEED_FILE):
+        with open(SEED_FILE, encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f):
+                if (r.get("브랜드명") or "").strip():
+                    rows.append({**r, "_korean": True})
+    if os.path.exists(GLOBAL_SEED_FILE):
+        with open(GLOBAL_SEED_FILE, encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f):
+                n = (r.get("영문명") or "").strip()
+                if n:
+                    rows.append({"브랜드명": n, "영문명": n, "카테고리": r.get("카테고리", ""), "_korean": False})
+    return rows
+
+
+def norm(name):
+    """브랜드명 비교용: 대소문자·악센트·기호·회사 접미사 제거"""
+    import unicodedata
+    n = unicodedata.normalize("NFKD", name or "")
+    n = "".join(c for c in n if not unicodedata.combining(c)).lower()
+    n = n.replace("&", " and ").replace("’", "'")
+    n = re.sub(r"\([^)]*\)", " ", n)
+    n = re.sub(r"[^0-9a-z가-힣]+", " ", n)
+    drop = {"inc", "corporation", "corp", "company", "co", "ltd", "limited", "plc", "group", "holding",
+            "holdings", "bv", "b", "v", "spa", "s", "p", "a", "ag", "se", "sa", "llc", "gmbh", "the", "ab", "nv"}
+    toks = [t for t in n.split() if t not in drop]
+    return " ".join(toks) or n.strip()
 
 
 def match_seed(seed):
@@ -312,12 +338,39 @@ EXCLUDE_TYPE_WORDS = [
 KEEP_TYPE_WORDS = ["brand", "label", "company", "business", "enterprise", "fashion house",
                    "retail", "manufacturer", "chain", "corporation"]
 FASHION_WORDS = ["fashion", "cloth", "apparel", "wear", "brand", "shoe", "footwear", "eyewear",
+                 "jewel", "lingerie", "handbag", "leather goods", "luggage", "denim", "jeans",
+                 "garment", "sporting goods", "couture", "designer", "watchmaker", "sneaker",
                  "패션", "의류", "브랜드", "옷", "신발", "안경", "아웃도어"]
 GROUP_WORDS = ["holding", "conglomerate", "chaebol", "business group", "corporate group"]
-RETAIL_WORDS = ["retail", "store", "shop", "chain", "e-commerce", "online", "boutique"]
+# 여러 브랜드를 파는 판매처·플랫폼 → 제외 (자체 브랜드 체인인 갭·자라 등은 해당 없음)
+PLATFORM_WORDS = ["online shop", "online store", "online retailer", "online platform", "e-commerce",
+                  "ecommerce", "marketplace", "open market", "department store", "online fashion",
+                  "온라인 상점", "온라인 쇼핑", "쇼핑몰", "오픈 마켓", "백화점", "편집숍", "multi-brand",
+                  "outlet", "duty-free", "duty free", "mail order", "off-price", "sporting goods retailer",
+                  "shoe retailer", "footwear retailer", "department-store"]
+CATEGORIES = ["럭셔리", "컨템포러리·디자이너", "캐주얼", "SPA·패스트패션", "스트리트", "스포츠", "아웃도어",
+              "클래식·테일러링", "데님·워크웨어", "신발", "잡화·주얼리", "언더웨어·스윔", "키즈"]
+# 수동 지정이 없는 브랜드는 유형·업종·설명의 단어로 추정 (위에서부터 먼저 걸리는 것)
+CATEGORY_RULES = [
+    ("언더웨어·스윔", ["lingerie", "underwear", "swimwear", "hosiery", "intimate", "bra ", "속옷", "란제리", "수영복"]),
+    ("키즈", ["children's", "childrenswear", "kids", "baby", "infant", "아동", "유아", "키즈"]),
+    ("아웃도어", ["outdoor", "mountaineering", "climbing", "hiking", "ski ", "skiwear", "아웃도어", "등산"]),
+    ("스포츠", ["sportswear", "sporting goods", "athletic", "sports equipment", "football kit", "cycling",
+              "running", "yoga", "activewear", "스포츠"]),
+    ("스트리트", ["streetwear", "skate", "surf", "hip hop", "스트리트"]),
+    ("데님·워크웨어", ["denim", "jeans", "workwear", "work wear", "청바지"]),
+    ("신발", ["footwear", "shoe", "sneaker", "boot", "sandal", "신발", "구두"]),
+    ("잡화·주얼리", ["jewel", "watch", "handbag", "leather goods", "eyewear", "sunglasses", "luggage", " hat", "hats",
+                 "millinery", "accessor", "bag", "주얼리", "시계", "가방", "안경", "잡화"]),
+    ("럭셔리", ["luxury", "haute couture", "couture house", "fashion house", "명품", "럭셔리"]),
+    ("클래식·테일러링", ["tailor", "menswear", "shirtmaker", "bespoke", "suits", "남성복", "정장"]),
+    ("SPA·패스트패션", ["fast fashion", "fast-fashion", "spa brand", "clothing retailer", "clothing store chain",
+                    "패스트 패션", "spa 브랜드"]),
+    ("컨템포러리·디자이너", ["designer", "contemporary", "디자이너"]),
+]
 
 
-def classify(type_labels_en):
+def classify(type_labels_en, desc=""):
     t = [s.lower() for s in type_labels_en]
     joined = " | ".join(t)
     if t:
@@ -325,18 +378,28 @@ def classify(type_labels_en):
         good = any(k in joined for k in KEEP_TYPE_WORDS)
         if bad and not good:
             return None, "유형이 브랜드 아님: " + ", ".join(bad[:3])
+    plat = [w for w in PLATFORM_WORDS if w in joined or w in desc]
+    if plat:
+        return None, "판매처·플랫폼: " + plat[0]
     if any(w in joined for w in ["brand", "label", "fashion house"]):
         return "브랜드", ""
-    if any(w in joined for w in RETAIL_WORDS):
-        return "리테일·편집숍", ""
     if any(w in joined for w in GROUP_WORDS):
         return "기업·그룹", ""
     return "브랜드", ""
 
 
+def guess_category(text):
+    text = " " + text.lower() + " "
+    for cat, words in CATEGORY_RULES:
+        if any(w.lower() in text for w in words):
+            return cat
+    return "미분류"
+
+
 def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
-          ambiguous=frozenset(), forced_korean=frozenset()):
+          ambiguous=frozenset(), forced_korean=frozenset(), curated=None):
     seed_rows = seed_rows or {}
+    curated = curated or {}
     recs = {i: {"id": i, **{k: [] for k in PROPS.values()}} for i in ids}
 
     for b in props_rows:
@@ -379,7 +442,9 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
         is_korean = (SOUTH_KOREA in r["country"] or SOUTH_KOREA in r["origin"]
                      or hq_korean or r["id"] in forced_korean)
 
-        kind, reason = classify(type_en)
+        ind_en = [label_map.get(t, {}).get("en", "") for t in r["industry"]]
+        desc_all = ((r.get("desc_en") or "") + " | " + (r.get("desc_ko") or "")).lower()
+        kind, reason = classify(type_en, desc_all)
         brandish = any(w in " ".join(type_en).lower() for w in ("brand", "label", "company", "fashion house"))
         if r.get("is_class") and not brandish:
             kind, reason = None, "개념·분류 항목(브랜드 아님)"
@@ -390,10 +455,32 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
             other_src = any(s != "수동 목록" for s in source_map.get(r["id"], ()))
             d = ((r.get("desc_en") or "") + " " + (r.get("desc_ko") or "")).lower()
             fashionish = any(w in d for w in FASHION_WORDS)
-            if other_src or fashionish:
-                is_korean = True
-            elif not is_korean:
+            seed_korean = (seed_rows.get(r["id"]) or {}).get("_korean")
+            if other_src or fashionish or (seed_korean and is_korean):
+                if seed_korean:
+                    is_korean = True
+            else:
                 kind, reason = None, "수동 목록과 이름만 같은 항목(패션 아님)"
+
+        # 카테고리: ① 수동 지정(목록) ② 유형·업종·설명 단어로 추정
+        cur = ((seed_rows.get(r["id"]) or {}).get("카테고리") or curated.get(norm(r.get("name_en") or ""))
+               or curated.get(clean(r.get("name_ko") or "")) or "").strip()
+        category = ""
+        if cur == "제외":
+            kind, reason = None, "수동 지정 제외(판매처·비패션)"
+        elif cur == "그룹":
+            if kind or reason.startswith("판매처"):
+                kind, reason = "기업·그룹", ""
+            category = ""
+        elif cur:
+            if reason.startswith("판매처") or (reason.startswith("유형") and r["id"] in seed_rows
+                                               and "human" not in reason):
+                kind, reason = "브랜드", ""  # 수동 지정이 규칙보다 우선
+            category = cur
+        if cur != "그룹" and not cur:
+            category = guess_category(" | ".join(type_en + ind_en) + " | " + desc_all)
+        if kind == "기업·그룹":
+            category = ""
 
         inc = sorted(y for y in (year_of(v) for v in r["inception"]) if y)
         dis = sorted(y for y in (year_of(v) for v in r["dissolved"]) if y)
@@ -406,6 +493,8 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
             "name_en": r.get("name_en") or "",
             "name_ko": r.get("name_ko") or "",
             "kind": kind or "",
+            "category": category,
+            "category_source": "수동" if cur and cur not in ("제외", "그룹") else ("" if kind == "기업·그룹" else "추정"),
             "desc": r.get("desc_ko") or r.get("desc_en") or (seed or {}).get("메모", ""),
             "country": [lab(c) for c in countries] or (["대한민국"] if is_korean else []),
             "is_korean": is_korean,
@@ -443,7 +532,9 @@ def manual_record(r, kowiki_url=""):
     en = (r.get("영문명") or "").strip()
     return {
         "id": "", "name": name, "name_en": en, "name_ko": name,
-        "kind": (r.get("구분") or "브랜드").strip(),
+        "kind": "기업·그룹" if (r.get("카테고리") or "").strip() == "그룹" else "브랜드",
+        "category": "" if (r.get("카테고리") or "").strip() == "그룹" else ((r.get("카테고리") or "").strip() or "미분류"),
+        "category_source": "수동" if (r.get("카테고리") or "").strip() not in ("", "그룹") else "",
         "desc": (r.get("메모") or "").strip(), "country": ["대한민국"], "is_korean": True,
         "founded": int(r["설립"]) if (r.get("설립") or "").strip().isdigit() else None,
         "dissolved": int(r["사라진 해"]) if (r.get("사라진 해") or "").strip().isdigit() else None,
@@ -460,6 +551,7 @@ def manual_record(r, kowiki_url=""):
 # ---------------------------------------------------------------- 저장
 COLUMNS = [
     ("name", "브랜드명", 26), ("name_en", "영문명", 26), ("kind", "구분", 12),
+    ("category", "카테고리", 16), ("category_source", "카테고리 근거", 10),
     ("status", "상태", 8), ("founded", "설립", 7), ("dissolved", "사라진 해", 9),
     ("country", "국가", 14), ("parent", "모회사·소유", 22), ("founder", "창립자", 22),
     ("desc", "설명", 40), ("fame", "인지도 지수", 10), ("website", "공식 사이트", 30),
@@ -514,6 +606,8 @@ def save_xlsx(rows, dropped, path, stats):
         ("활동중", [r for r in rows if r["status"] == "활동중"], COLUMNS),
         ("사라진 브랜드", sorted([r for r in rows if r["status"] == "사라짐"],
                              key=lambda r: -(r["dissolved"] or 0)), COLUMNS),
+        *[(c.replace("·", "_")[:31], [r for r in rows if r["category"] == c], COLUMNS) for c in CATEGORIES],
+        ("미분류", [r for r in rows if r["kind"] == "브랜드" and r["category"] == "미분류"], COLUMNS),
         ("제외됨", dropped, DROP_COLUMNS),
     ]
     head_fill = PatternFill("solid", fgColor="111111")
@@ -600,6 +694,14 @@ def main():
             seed_rows[q] = r
             ambiguous.add(q)  # 진짜 그 브랜드인지 build()에서 확인
         print(f"   목록 {len(seed)}개 → 위키데이터 일치 {len(seed) - len(unmatched)}개, 미일치 {len(unmatched)}개")
+    curated = {}
+    for r in seed:
+        c = (r.get("카테고리") or "").strip()
+        if c:
+            if r["_korean"]:
+                curated.setdefault(clean(r["브랜드명"].strip()), c)
+            if (r.get("영문명") or "").strip():
+                curated.setdefault(norm(r["영문명"]), c)
     ids = sorted(source_map)
     print(f"   합계(중복 제거): {len(ids)}개", flush=True)
 
@@ -631,7 +733,7 @@ def main():
         time.sleep(0.5)
 
     rows, dropped = build(ids, props_rows, meta_rows, label_map, source_map,
-                          seed_rows, frozenset(ambiguous), frozenset(forced_korean))
+                          seed_rows, frozenset(ambiguous), frozenset(forced_korean), curated)
 
     # 위키데이터에 없는 국내 브랜드: 한국어 위키백과 문서만 있는 것 + 수동 목록 미일치
     have = {r["name_ko"] for r in rows} | {r["name"] for r in rows}
@@ -640,7 +742,9 @@ def main():
             rows.append(manual_record({"브랜드명": t}, "https://ko.wikipedia.org/wiki/" + quote(t)))
             have.add(t)
     seed_unmatched_added = 0
-    for r in seed:  # 위키데이터에서 확인 못 한 수동 목록 브랜드는 그대로 추가
+    for r in seed:  # 위키데이터에서 확인 못 한 국내 수동 목록 브랜드는 그대로 추가
+        if not r["_korean"] or (r.get("카테고리") or "").strip() == "제외":
+            continue
         if r["브랜드명"].strip() not in have and (r.get("영문명") or "").strip() not in {x["name_en"] for x in rows if x["is_korean"]}:
             rows.append(manual_record(r))
             have.add(r["브랜드명"].strip())
@@ -650,10 +754,11 @@ def main():
     summary = [
         ("전체 브랜드", len(rows)),
         ("  └ 브랜드", sum(r["kind"] == "브랜드" for r in rows)),
-        ("  └ 리테일·편집숍", sum(r["kind"] == "리테일·편집숍" for r in rows)),
         ("  └ 기업·그룹", sum(r["kind"] == "기업·그룹" for r in rows)),
         ("국내 브랜드", sum(r["is_korean"] for r in rows)),
         ("  └ 수동 목록에서만 추가(위키 정보 없음)", seed_unmatched_added),
+        *[(f"카테고리 · {c}", sum(r["category"] == c for r in rows)) for c in CATEGORIES + ["미분류"]],
+        ("  └ 카테고리 수동 지정", sum(r.get("category_source") == "수동" for r in rows)),
         ("활동중", sum(r["status"] == "활동중" for r in rows)),
         ("사라진 브랜드", sum(r["status"] == "사라짐" for r in rows)),
         ("제외됨(브랜드 아님)", len(dropped)),
