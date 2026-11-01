@@ -608,7 +608,7 @@ COLUMNS = [
     ("category", "카테고리", 16), ("category_source", "카테고리 근거", 10),
     ("status", "상태", 8), ("founded", "설립", 7), ("dissolved", "사라진 해", 9),
     ("country", "국가", 14), ("parent", "모회사·소유", 22), ("founder", "창립자", 22),
-    ("desc", "설명", 40), ("fame", "인지도 지수", 10), ("website", "공식 사이트", 30),
+    ("desc", "설명", 40), ("sublines", "서브라인", 24), ("fame", "인지도 지수", 10), ("website", "공식 사이트", 30),
     ("naver_shopping", "네이버쇼핑", 14), ("instagram", "인스타그램", 14),
     ("kowiki", "한국어 위키백과", 14), ("enwiki", "영어 위키백과", 14),
     ("wikidata", "위키데이터", 14), ("image", "이미지(자유 라이선스)", 14),
@@ -619,6 +619,8 @@ LINK_COLS = {"website", "naver_shopping", "instagram", "kowiki", "enwiki", "wiki
 
 
 def cell(v):
+    if v is None:
+        return ""
     if isinstance(v, list):
         return ", ".join(v)
     return "" if v is None else v
@@ -629,7 +631,7 @@ def save_csv(rows, path):
         w = csv.writer(f)
         w.writerow([c[1] for c in COLUMNS])
         for r in rows:
-            w.writerow([cell(r[c[0]]) for c in COLUMNS])
+            w.writerow([cell(r.get(c[0])) for c in COLUMNS])
 
 
 def save_xlsx(rows, dropped, path, stats, pending=()):
@@ -832,8 +834,37 @@ def main():
             have.add(clean(r["브랜드명"].strip()))
             seed_unmatched_added += 1
 
-    # 플랫폼 대조에서 나왔지만 위키데이터에서도 못 찾은 브랜드명 → 엑셀 검토 시트로만 (사이트 데이터엔 넣지 않음)
+    # 공식 사이트로 확인된 브랜드(seed/official_sites.csv) 추가 — 브랜드 본인 사이트의 소개문·인스타 사용
     have_norm = {norm(x) for r in rows for x in (r["name"], r["name_en"], r["name_ko"]) if x}
+    sub_file = os.path.join(os.path.dirname(SEED_FILE), "sublines.csv")
+    subs = list(csv.DictReader(open(sub_file, encoding="utf-8-sig"))) if os.path.exists(sub_file) else []
+    sub_norm = {norm(x["서브라인"]) for x in subs}
+    off_file = os.path.join(os.path.dirname(SEED_FILE), "official_sites.csv")
+    if os.path.exists(off_file):
+        for o in csv.DictReader(open(off_file, encoding="utf-8-sig")):
+            n = o["브랜드명"].strip()
+            if not n or norm(n) in have_norm or norm(n) in sub_norm:
+                continue
+            site = o["공식 사이트"]
+            text = (o.get("사이트 제목", "") + " | " + o.get("소개", "")).lower()
+            cat = curated.get(norm(n)) or guess_category(text)
+            rows.append({**manual_record({"브랜드명": n, "영문명": n, "메모": o.get("소개", ""), "카테고리": cat if cat != "미분류" else "",
+                                          "공식 사이트": site}),
+                         "country": [], "is_korean": ".kr/" in site + "/" or site.rstrip("/").endswith(".kr"),
+                         "name_ko": "", "instagram": o.get("인스타그램", ""),
+                         "naver_shopping": "https://search.shopping.naver.com/search/all?query=" + quote(n),
+                         "found_via": ["공식 사이트 확인"], "source": "공식 사이트",
+                         "category_source": "수동" if curated.get(norm(n)) else ("추정" if cat != "미분류" else "")})
+            have_norm.add(norm(n))
+    # 서브라인은 별도 브랜드가 아니라 모브랜드에 붙임 (예: 모델 MM6 → 메종 마르지엘라)
+    for x in subs:
+        parent = next((r for r in rows if norm(x["모브랜드"]) in (norm(r["name_en"]), norm(r["name"]))), None)
+        if parent is not None:
+            parent.setdefault("sublines", []).append(x["서브라인"])
+        have_norm.add(norm(x["서브라인"]))
+
+    # 플랫폼 대조에서 나왔지만 어디서도 확인 못 한 브랜드명 → 엑셀 검토 시트로만 (사이트 데이터엔 넣지 않음)
+    rows = [r for r in rows if not (r["source"] != "위키데이터" and norm(r["name"]) in sub_norm)]
     pending = [{"name": r["브랜드명"], "naver_shopping": "https://search.shopping.naver.com/search/all?query=" + quote(r["브랜드명"])}
                for r in seed if r.get("_checklist") and norm(r["브랜드명"]) not in have_norm]
 

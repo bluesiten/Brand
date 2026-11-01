@@ -13,8 +13,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UA = {"User-Agent": "Mozilla/5.0 (compatible; DS3-brand-archive/0.1; +https://github.com/bluesiten/brand)"}
 TLDS = [".com", ".co", ".studio", ".net", ".store", ".shop", ".co.uk", ".it", ".fr", ".de", ".jp",
         ".co.kr", ".kr", ".com.au", ".dk", ".se", ".us", ".world", ".online", ".paris", ".nyc"]
-FASHION = ("shop", "collection", "clothing", "apparel", "fashion", "wear", "shoes", "footwear", "jewel",
-           "bags", "cart", "ready-to-wear", "menswear", "womenswear", "store", "lookbook", "accessories")
+# '쇼핑몰'만 같은 사이트를 거르기 위해 shop/store 같은 일반어는 빼고 패션 전용 단어만 셈
+FASHION = ("clothing", "apparel", "fashion", "ready-to-wear", "ready to wear", "menswear", "womenswear",
+           "collection", "lookbook", "footwear", "shoes", "sneaker", "jewelry", "jewellery", "eyewear",
+           "sunglasses", "handbag", "bags", "accessories", "knitwear", "denim", "outerwear", "swimwear",
+           "lingerie", "garment", "atelier", "runway", "dresses", "trousers", "jackets", "t-shirts", "의류", "컬렉션")
+REJECT_HOST_LIST = {x.strip() for x in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "seed", "official_sites_reject.txt"), encoding="utf-8").read().split("\n") if x.strip()} \
+    if os.path.exists(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "seed", "official_sites_reject.txt")) else set()
+SUFFIX = ["", "studio", "official", "world", "paris", "nyc", "london", "tokyo", "milano", "design", "store", "online"]
 PARKED = ("domain for sale", "buy this domain", "is for sale", "godaddy", "hugedomains", "sedo", "parked",
           "domain name", "dan.com", "afternic", "this domain")
 IG_SKIP = {"p", "explore", "accounts", "reel", "stories", "tv", "about", "developer", "legal"}
@@ -47,8 +53,11 @@ def check(name):
     target = norm(name).replace(" ", "")
     if len(target) < 2:
         return None
-    for s in slugs(name):
-        for t in TLDS:
+    hosts_tried = set()
+    for s0 in slugs(name):
+      for suf in SUFFIX:
+        s = s0 + ("-" if "-" in s0 and suf else "") + suf
+        for t in (TLDS if not suf else [".com"]):
             for host in (f"https://www.{s}{t}", f"https://{s}{t}"):
                 got = probe(host)
                 if not got:
@@ -60,12 +69,13 @@ def check(name):
                 low = page.lower()
                 if any(p in head or p in low[:5000] for p in PARKED):
                     break
-                ok_name = target in norm(title + " " + site).replace(" ", "") or \
-                          target in norm(re.sub(r"https?://(www\.)?", "", final).split("/")[0].split(".")[0]).replace(" ", "")
-                ok_fashion = sum(w in low for w in FASHION) >= 2
-                # 짧은 이름(4자 이하)은 제목에 이름이 꼭 있어야 인정
-                if len(target) <= 4 and target not in norm(title + " " + site).replace(" ", ""):
-                    ok_name = False
+                host_only = re.sub(r"https?://(www\.)?", "", final).split("/")[0]
+                if host_only in hosts_tried or host_only in REJECT_HOSTS:
+                    break
+                hosts_tried.add(host_only)
+                # 페이지 제목·사이트명에 브랜드명이 들어 있어야 함 (도메인만 같은 건 불인정)
+                ok_name = target in norm(title + " " + site).replace(" ", "")
+                ok_fashion = sum(w in low for w in FASHION) >= 3
                 if ok_name and ok_fashion:
                     igs = [h for h in re.findall(r"instagram\.com/([A-Za-z0-9_.]{2,30})", page) if h.lower() not in IG_SKIP]
                     desc = meta(page, "og:description") or meta(page, "description")
@@ -74,10 +84,16 @@ def check(name):
                 break  # 같은 도메인 www/비www 중복 확인 방지
     return None
 
+REJECT_HOSTS = REJECT_HOST_LIST
+SUB_FILE = os.path.join(ROOT, "seed", "sublines.csv")
+SUBLINE = {norm(r["서브라인"]) for r in csv.DictReader(open(SUB_FILE, encoding="utf-8-sig"))} if os.path.exists(SUB_FILE) else set()
+
+
 def main():
     import openpyxl
     wb = openpyxl.load_workbook(os.path.join(ROOT, "data", "brands.xlsx"), read_only=True)
     names = [r[0] for r in wb["보강 필요(이름만 확인)"].iter_rows(min_row=2, values_only=True) if r and r[0]]
+    names = [n for n in names if norm(n) not in SUBLINE]
     print(f"대상 {len(names)}개", flush=True)
     with ThreadPoolExecutor(24) as ex:
         res = list(ex.map(check, names))
