@@ -850,7 +850,8 @@ def main():
             cat = curated.get(norm(n)) or guess_category(text)
             rows.append({**manual_record({"브랜드명": n, "영문명": n, "메모": o.get("소개", ""), "카테고리": cat if cat != "미분류" else "",
                                           "공식 사이트": site}),
-                         "country": [], "is_korean": ".kr/" in site + "/" or site.rstrip("/").endswith(".kr"),
+                         "country": [], "is_korean": ".kr/" in site + "/" or site.rstrip("/").endswith(".kr")
+                                       or bool(re.search(r"[가-힣]", o.get("사이트 제목", ""))) or "korea" in o.get("사이트 제목", "").lower(),
                          "name_ko": "", "instagram": o.get("인스타그램", ""),
                          "naver_shopping": "https://search.shopping.naver.com/search/all?query=" + quote(n),
                          "found_via": ["공식 사이트 확인"], "source": "공식 사이트",
