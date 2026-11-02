@@ -530,6 +530,9 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
                 kind, reason = None, "패션 근거 없음(영어 위키백과 분류만 해당)"
             # 브랜드가 아니라 상품·모델·행사·스타일 문서 (예: 에어 맥스, 샤넬 2.55, 패션쇼)
             tj = " | ".join(type_en).lower()
+            if kind and not any(w in tj for w in ("brand", "label", "company", "business", "enterprise", "corporation",
+                                                  "organization", "organisation", "manufacturer", "firm", "fashion house")):
+                kind, reason = None, "상품·모델·행사 문서(브랜드 아님)"
             if kind and any(w in tj for w in ("model", "product", "fashion show", "trend", "silhouette",
                                               "illustration", "fictional", "item of clothing", "type of",
                                               "garment", "dress", "suit", "series", "edition", "line of")):
