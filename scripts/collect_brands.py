@@ -528,6 +528,12 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
             evidence = (" | ".join(type_en + ind_en) + " | " + desc_all).lower()
             if not any(w in evidence for w in FASHION_STRICT):
                 kind, reason = None, "패션 근거 없음(영어 위키백과 분류만 해당)"
+            # 브랜드가 아니라 상품·모델·행사·스타일 문서 (예: 에어 맥스, 샤넬 2.55, 패션쇼)
+            tj = " | ".join(type_en).lower()
+            if kind and any(w in tj for w in ("model", "product", "fashion show", "trend", "silhouette",
+                                              "illustration", "fictional", "item of clothing", "type of",
+                                              "garment", "dress", "suit", "series", "edition", "line of")):
+                kind, reason = None, "상품·모델·행사 문서(브랜드 아님)"
         brandish = any(w in " ".join(type_en).lower() for w in ("brand", "label", "company", "fashion house"))
         if r.get("is_class") and not brandish:
             kind, reason = None, "개념·분류 항목(브랜드 아님)"
