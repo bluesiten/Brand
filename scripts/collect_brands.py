@@ -164,17 +164,34 @@ def fetch_labels(ids):
 KOWIKI_API = "https://ko.wikipedia.org/w/api.php"
 SEED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "seed", "korean_brands.csv")
 KO_CAT_SEARCH = ["대한민국의 의류 브랜드", "대한민국의 패션 브랜드", "대한민국의 의류 회사",
-                 "대한민국의 패션 회사", "대한민국의 신발 브랜드", "대한민국의 스포츠웨어", "대한민국의 패션"]
+                 "대한민국의 패션 회사", "대한민국의 신발 브랜드", "대한민국의 스포츠웨어", "대한민국의 패션",
+                 "대한민국의 의류 기업", "대한민국의 패션 기업", "대한민국의 아웃도어", "대한민국의 신발 회사",
+                 "대한민국의 상표", "대한민국의 안경", "대한민국의 주얼리", "한국의 패션 브랜드"]
+ENWIKI_API = "https://en.wikipedia.org/w/api.php"
+EN_CAT_SEARCH = ["clothing brands", "fashion brands", "clothing companies", "footwear brands", "shoe companies",
+                 "sportswear brands", "streetwear brands", "luxury brands", "defunct clothing companies",
+                 "eyewear brands", "lingerie brands", "swimwear brands", "jeans brands", "handbag brands",
+                 "fashion houses", "high fashion brands", "outdoor clothing brands", "haute couture"]
+EN_CAT_ANY = ("clothing", "fashion", "footwear", "shoe", "sportswear", "streetwear", "apparel", "luxury",
+              "eyewear", "lingerie", "swimwear", "denim", "jeans", "handbag", "leather goods", "couture",
+              "outerwear", "underwear", "hosiery", "hat ", "hats", "knitwear")
+EN_CAT_BAN = ("people", "designers", "models", "retailers", "stores", "shops", "malls", "museum", "magazine",
+              "events", "fashion week", "awards", "history", "film", "song", "fiction", "logo", "image", "stub",
+              "template", "list", "department", "e-commerce", "online", "textile", "trade fair", "school",
+              "photographer", "journalist", "editor", "blogger", "television", "video game", "mascot",
+              "wikipedia", "articles", "redirect", "in popular culture", "advertising", "uniform", "costume",
+              "religious", "military", "subculture", "style", "movement", "by decade", "clothing industry",
+              "workers", "activists", "chains", "manufacturers of", "machinery", "dye", "brands of cigarettes")
 KO_CAT_MUST = ("대한민국", "한국")
 KO_CAT_ANY = ("의류", "패션", "브랜드", "신발", "스포츠웨어", "아웃도어", "잡화")
 KO_CAT_BAN = ("인물", "디자이너", "모델", "잡지", "방송", "음악", "가수", "배우", "식품", "화장품", "자동차", "전자")
 
 
-def kowiki(params):
+def kowiki(params, api=None):
     params = {**params, "format": "json", "formatversion": 2}
     for i in range(4):
         try:
-            r = session.get(KOWIKI_API, params=params, timeout=60)
+            r = session.get(api or KOWIKI_API, params=params, timeout=60)
             if r.status_code == 200:
                 return r.json()
         except requests.exceptions.RequestException:
@@ -196,7 +213,20 @@ def korean_categories():
     return sorted(found)
 
 
-def category_pages(cats, depth=2):
+def english_categories():
+    found = set()
+    for kw in EN_CAT_SEARCH:
+        res = kowiki({"action": "query", "list": "search", "srsearch": kw, "srnamespace": 14, "srlimit": 50}, ENWIKI_API)
+        for h in res.get("query", {}).get("search", []):
+            t = h["title"]; tl = t.lower()
+            if any(a in tl for a in EN_CAT_ANY) and not any(b in tl for b in EN_CAT_BAN):
+                found.add(t)
+        time.sleep(0.3)
+    return sorted(found)
+
+
+def category_pages(cats, depth=2, api=None, ban=None, limit=20000):
+    ban = ban if ban is not None else KO_CAT_BAN
     pages, seen, frontier = set(), set(), list(cats)
     for _ in range(depth + 1):
         nxt = []
@@ -207,12 +237,15 @@ def category_pages(cats, depth=2):
             cont = {}
             while True:
                 res = kowiki({"action": "query", "list": "categorymembers", "cmtitle": c,
-                              "cmlimit": 500, "cmnamespace": "0|14", **cont})
+                              "cmlimit": 500, "cmnamespace": "0|14", **cont}, api)
                 for m in res.get("query", {}).get("categorymembers", []):
                     if m["ns"] == 0:
-                        pages.add(m["title"])
-                    elif not any(b in m["title"] for b in KO_CAT_BAN):
+                        if not m["title"].lower().startswith(("list of", "lists of")):
+                            pages.add(m["title"])
+                    elif not any(b in m["title"].lower() for b in ban):
                         nxt.append(m["title"])
+                if len(pages) >= limit:
+                    return pages
                 if "continue" not in res:
                     break
                 cont = res["continue"]
@@ -220,11 +253,11 @@ def category_pages(cats, depth=2):
     return pages
 
 
-def titles_to_qids(titles):
+def titles_to_qids(titles, api=None):
     out = {}
     for part in chunks(sorted(titles), 50):
         res = kowiki({"action": "query", "prop": "pageprops", "ppprop": "wikibase_item",
-                      "titles": "|".join(part), "redirects": 1})
+                      "titles": "|".join(part), "redirects": 1}, api)
         for p in res.get("query", {}).get("pages", []):
             q = p.get("pageprops", {}).get("wikibase_item")
             if q:
@@ -729,6 +762,22 @@ def main():
         for i in got:
             source_map.setdefault(i, set()).add("업종:" + l)
         time.sleep(1)
+
+    print("2-0) 영어 위키백과 브랜드 분류", flush=True)
+    try:
+        ecats = english_categories()
+        print(f"   찾은 분류 {len(ecats)}개:", ecats[:40], flush=True)
+        etitles = category_pages(ecats, depth=2, api=ENWIKI_API, ban=EN_CAT_BAN)
+        e2q = titles_to_qids(etitles, ENWIKI_API)
+        print(f"   문서 {len(etitles)}개 → 위키데이터 연결 {len(e2q)}개", flush=True)
+        new = 0
+        for q in e2q.values():
+            if q not in source_map:
+                new += 1
+            source_map.setdefault(q, set()).add("영어 위키백과 분류")
+        print(f"   새로 추가된 후보 {new}개", flush=True)
+    except Exception as e:
+        print("   ! 영어 위키백과 보강 실패:", e)
 
     print("2-1) 국내 브랜드 보강 — 한국어 위키백과 분류", flush=True)
     forced_korean = set()
