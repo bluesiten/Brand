@@ -169,10 +169,10 @@ KO_CAT_SEARCH = ["대한민국의 의류 브랜드", "대한민국의 패션 브
                  "대한민국의 상표", "대한민국의 안경", "대한민국의 주얼리", "한국의 패션 브랜드"]
 ENWIKI_API = "https://en.wikipedia.org/w/api.php"
 EN_CAT_SEARCH = ["clothing brands", "fashion brands", "clothing companies", "footwear brands", "shoe companies",
-                 "sportswear brands", "streetwear brands", "luxury brands", "defunct clothing companies",
+                 "sportswear brands", "streetwear brands", "defunct clothing companies",
                  "eyewear brands", "lingerie brands", "swimwear brands", "jeans brands", "handbag brands",
                  "fashion houses", "high fashion brands", "outdoor clothing brands", "haute couture"]
-EN_CAT_ANY = ("clothing", "fashion", "footwear", "shoe", "sportswear", "streetwear", "apparel", "luxury",
+EN_CAT_ANY = ("clothing", "fashion", "footwear", "shoe", "sportswear", "streetwear", "apparel",
               "eyewear", "lingerie", "swimwear", "denim", "jeans", "handbag", "leather goods", "couture",
               "outerwear", "underwear", "hosiery", "hat ", "hats", "knitwear")
 EN_CAT_BAN = ("people", "designers", "models", "retailers", "stores", "shops", "malls", "museum", "magazine",
@@ -181,7 +181,14 @@ EN_CAT_BAN = ("people", "designers", "models", "retailers", "stores", "shops", "
               "photographer", "journalist", "editor", "blogger", "television", "video game", "mascot",
               "wikipedia", "articles", "redirect", "in popular culture", "advertising", "uniform", "costume",
               "religious", "military", "subculture", "style", "movement", "by decade", "clothing industry",
-              "workers", "activists", "chains", "manufacturers of", "machinery", "dye", "brands of cigarettes")
+              "workers", "activists", "chains", "manufacturers of", "machinery", "dye", "brands of cigarettes",
+              "vehicle", "automobile", "car ", "cars", "motor", "hotel", "football", "tournament", "perfume",
+              "fragrance", "cosmetic", "beverage", "food", "drink", "tobacco", "toy", "doll", "watch")
+# 영어 위키백과 분류로'만' 들어온 항목은 이 단어 중 하나가 유형·업종·설명에 있어야 인정
+FASHION_STRICT = ("fashion", "cloth", "apparel", "garment", "sportswear", "streetwear", "eyewear", "underwear",
+                  "swimwear", "knitwear", "outerwear", "activewear", "menswear", "womenswear", "shoe", "footwear",
+                  "sneaker", "boot", "jewel", "handbag", "leather goods", "luggage", "denim", "jeans", "lingerie",
+                  "couture", "hosiery", "accessor", "hat", "의류", "패션", "신발", "가방", "주얼리", "속옷")
 KO_CAT_MUST = ("대한민국", "한국")
 KO_CAT_ANY = ("의류", "패션", "브랜드", "신발", "스포츠웨어", "아웃도어", "잡화")
 KO_CAT_BAN = ("인물", "디자이너", "모델", "잡지", "방송", "음악", "가수", "배우", "식품", "화장품", "자동차", "전자")
@@ -517,6 +524,10 @@ def build(ids, props_rows, meta_rows, label_map, source_map, seed_rows=None,
         ind_en = [label_map.get(t, {}).get("en", "") for t in r["industry"]]
         desc_all = ((r.get("desc_en") or "") + " | " + (r.get("desc_ko") or "")).lower()
         kind, reason = classify(type_en, desc_all)
+        if source_map.get(r["id"]) == {"영어 위키백과 분류"} and kind:
+            evidence = (" | ".join(type_en + ind_en) + " | " + desc_all).lower()
+            if not any(w in evidence for w in FASHION_STRICT):
+                kind, reason = None, "패션 근거 없음(영어 위키백과 분류만 해당)"
         brandish = any(w in " ".join(type_en).lower() for w in ("brand", "label", "company", "fashion house"))
         if r.get("is_class") and not brandish:
             kind, reason = None, "개념·분류 항목(브랜드 아님)"
@@ -863,7 +874,7 @@ def main():
             best[key] = r
     rows = list(best.values())
     # 수동 목록 이름으로 찾았다가 패션이 아니어서 버린 동명 항목은 너무 많아 시트에서 생략
-    dropped = [d for d in dropped if not d["drop_reason"].startswith("수동 목록과 이름만")]
+    dropped = [d for d in dropped if not d["drop_reason"].startswith(("수동 목록과 이름만", "패션 근거 없음"))]
 
     # 위키데이터에 없는 국내 브랜드: 한국어 위키백과 문서만 있는 것 + 수동 목록 미일치
     have = {r["name_ko"] for r in rows} | {r["name"] for r in rows}
