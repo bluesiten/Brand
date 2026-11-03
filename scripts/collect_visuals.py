@@ -39,11 +39,25 @@ def strip(h):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", h or ""))).strip()
 
 
-def find(name, limit=6):
-    q = f'"{name}" ({" OR ".join(chr(34) + k + chr(34) for k in KEYS[:6])}) filetype:bitmap'
-    res = api({"action": "query", "generator": "search", "gsrsearch": q, "gsrnamespace": 6, "gsrlimit": 30,
+def search(q):
+    res = api({"action": "query", "generator": "search", "gsrsearch": q, "gsrnamespace": 6, "gsrlimit": 25,
                "prop": "imageinfo", "iiprop": "url|size|extmetadata", "iiurlwidth": 900})
-    pages = sorted(res.get("query", {}).get("pages", []), key=lambda p: p.get("index", 99))
+    if os.environ.get("TEST") and not res.get("query"):
+        print("    raw:", str(res)[:200])
+    return sorted(res.get("query", {}).get("pages", []), key=lambda p: p.get("index", 99))
+
+
+def find(name, limit=6):
+    pages, seen = [], set()
+    for kw in ("runway", "fashion show", "collection"):
+        for p in search(f'"{name}" {kw}'):
+            if p["title"] not in seen:
+                seen.add(p["title"]); pages.append(p)
+        if len(pages) >= 40:
+            break
+        time.sleep(0.1)
+    if os.environ.get("TEST"):
+        print("    titles:", [p["title"][:60] for p in pages[:6]])
     out, nk = [], key(name)
     for p in pages:
         t = p["title"]
