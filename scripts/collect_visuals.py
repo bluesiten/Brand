@@ -42,9 +42,10 @@ def strip(h):
 SHOWY = re.compile(r"(runway|catwalk|fashion show|fashion week|défilé|defile|sfilata|backstage|lookbook|look book|"
                    r"collection|couture|ready.to.wear|prêt|spring|summer|fall|autumn|winter|resort|cruise|"
                    r"\b(ss|fw|aw|pf)\s?\d{2}|\b(19|20)\d{2}\s?(ss|fw|aw)\b|menswear|womenswear|campaign)", re.I)
-CAT_OK = re.compile(r"(fashion show|runway|catwalk|collection|fashion week|défilé|sfilata|couture|ready-to-wear|"
-                    r"spring|summer|fall|autumn|winter|resort|cruise|clothing|garments|dresses|footwear|shoes|bags|"
-                    r"products|campaign|lookbook)", re.I)
+CAT_SHOW = re.compile(r"(fashion show|runway|catwalk|fashion week|défilé|sfilata|haute couture|ready-to-wear|"
+                      r"\b(spring|summer|fall|autumn|winter|resort|cruise|pre-fall)\b.*\d{4}|\d{4}.*\b(spring|summer|fall|autumn|winter)\b|lookbook)", re.I)
+CAT_PROD = re.compile(r"(footwear|shoes|sneakers|boots|handbags|bags|products|garments|dresses|clothing by|"
+                      r"watches|eyewear|jewellery|jewelry|coats|jackets|jeans)", re.I)
 
 
 def imageinfo(titles):
@@ -58,7 +59,7 @@ def members(cat, cmtype, limit=50):
     return [m["title"] for m in res.get("query", {}).get("categorymembers", [])]
 
 
-def accept(pages, nk, need_brand, limit, out):
+def accept(pages, nk, need_brand, limit, out, kind="r"):
     for p in pages:
         t = p["title"]; tl = t.lower()
         if any(b in tl for b in BAD) or not re.search(r"\.(jpe?g|png|webp)$", tl):
@@ -77,25 +78,28 @@ def accept(pages, nk, need_brand, limit, out):
         out.append({"u": ii.get("thumburl") or ii.get("url"), "w": ii.get("descriptionurl"),
                     "a": strip(md.get("Artist", {}).get("value", ""))[:80] or "Wikimedia Commons",
                     "l": lic, "t": re.sub(r"^File:|\.\w+$", "", t)[:120],
-                    "v": 1 if ii.get("height", 0) > ii.get("width", 0) else 0})
+                    "v": 1 if ii.get("height", 0) > ii.get("width", 0) else 0, "k": kind})
         if len(out) >= limit:
             return
 
 
-def from_category(cat, nk, limit, out):
-    """브랜드 공식 분류 → 패션쇼·컬렉션 하위 분류(2단계까지)의 사진"""
+def from_category(cat, nk, limit, out, rx, kind):
+    """브랜드 공식 분류 → 조건(rx)에 맞는 하위 분류(2단계까지)의 사진"""
     subs, frontier = [], [cat]
     for _ in range(2):
         nxt = []
         for c in frontier:
             for sc in members(c, "subcat", 100):
-                if CAT_OK.search(sc) and not any(b in sc.lower() for b in ("store", "shop", "building", "logo", "advert")):
-                    subs.append(sc); nxt.append(sc)
-        frontier = nxt[:15]
+                if any(b in sc.lower() for b in ("store", "shop", "building", "logo", "advert", "people", "sponsor", "athlete", "players")):
+                    continue
+                nxt.append(sc)
+                if rx.search(sc):
+                    subs.append(sc)
+        frontier = nxt[:20]
     for sc in subs[:12]:
         files = members(sc, "file", 20)
         if files:
-            accept(imageinfo(files[:20]), nk, False, limit, out)
+            accept(imageinfo(files[:20]), nk, False, limit, out, kind)
         if len(out) >= limit:
             return
         time.sleep(0.1)
@@ -109,14 +113,17 @@ def search(q):
 
 def find(name, commons_cat=None, limit=8):
     out, nk = [], key(name)
+    # ① 공용 분류 안의 패션쇼·시즌 컬렉션 ② 제목에 런웨이·시즌 표기가 있는 검색 결과 ③ 공용 분류 안의 제품 사진
     if commons_cat:
-        from_category("Category:" + commons_cat, nk, limit, out)
+        from_category("Category:" + commons_cat, nk, limit, out, CAT_SHOW, "r")
     if len(out) < limit:
         for kw in ("runway", "fashion show", "fashion week", "collection"):
-            accept(search(f'"{name}" {kw}'), nk, True, limit, out)
+            accept(search(f'"{name}" {kw}'), nk, True, limit, out, "r")
             if len(out) >= limit:
                 break
             time.sleep(0.1)
+    if commons_cat and len(out) < 4:
+        from_category("Category:" + commons_cat, nk, min(limit, len(out) + 4), out, CAT_PROD, "p")
     return out
 
 
