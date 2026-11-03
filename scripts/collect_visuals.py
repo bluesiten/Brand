@@ -11,9 +11,15 @@ API = "https://commons.wikimedia.org/w/api.php"
 S = requests.Session()
 S.headers["User-Agent"] = "DS3-brand-archive/0.1 (https://github.com/bluesiten/Brand)"
 KEYS = ["runway", "fashion show", "fashion week", "collection", "catwalk", "défilé", "sfilata", "lookbook"]
-BAD = ("logo", "store", "shop", "boutique", "building", "headquarter", "factory", "flagship", "sign",
+BAD = ("naked", "nude", "crotch", "topless", "nsfw", "breast", "erotic", "sexy", "upskirt", "bikini contest",
+       "helicopter", "aircraft", "missile", "army", "navy", "air force", "rocket", "locomotive", "warship",
+       "lighter", "stadium", "match", " vs ", "logo", "store", "shop", "boutique", "building", "headquarter", "factory", "flagship", "sign",
        "billboard", "advert", "map", "chart", "svg", "icon", "portrait of", "grave", "museum", "street view")
 OK_LIC = ("cc by", "cc-by", "cc0", "public domain", "pd", "attribution")
+
+
+REJ_FILE = os.path.join(ROOT, "seed", "visuals_reject.txt")
+REJECT = {l.strip() for l in open(REJ_FILE, encoding="utf-8")} if os.path.exists(REJ_FILE) else set()
 
 
 def api(params):
@@ -40,7 +46,8 @@ def strip(h):
 
 
 SHOWY = re.compile(r"(runway|catwalk|fashion show|fashion week|défilé|defile|sfilata|backstage|lookbook|look book|"
-                   r"collection|couture|ready.to.wear|prêt|spring|summer|fall|autumn|winter|resort|cruise|"
+                   r"(spring|summer|fall|autumn|winter|resort|cruise|couture|\d{4}).{0,25}collection|collection.{0,25}(\d{4}|\bss\b|\bfw\b|\baw\b)|"
+                   r"couture|ready.to.wear|prêt|\b(spring|summer|fall|autumn|winter|resort|cruise)\b.{0,12}(\d{4}|\d{2}\b)|"
                    r"\b(ss|fw|aw|pf)\s?\d{2}|\b(19|20)\d{2}\s?(ss|fw|aw)\b|menswear|womenswear|campaign)", re.I)
 CAT_SHOW = re.compile(r"(fashion show|runway|catwalk|fashion week|défilé|sfilata|haute couture|ready-to-wear|"
                       r"\b(spring|summer|fall|autumn|winter|resort|cruise|pre-fall)\b.*\d{4}|\d{4}.*\b(spring|summer|fall|autumn|winter)\b|lookbook)", re.I)
@@ -61,7 +68,7 @@ def members(cat, cmtype, limit=50):
 
 PRODUCT = re.compile(r"\b(dress|gown|shoes?|sneakers?|boots?|bag|handbag|purse|coat|jacket|jeans|denim|scarf|"
                      r"watch|necklace|bracelet|ring|sunglasses|eyewear|trainers?|sandals?|heels|suit|blouse|shirt|"
-                     r"knit|sweater|hat|cap|ensemble|outfit|look|vintage|archive|exhibition|museum)\b", re.I)
+                     r"knit|sweater|hat|cap|ensemble|outfit)\b", re.I)
 
 
 def brand_rx(name):
@@ -92,6 +99,8 @@ def accept(pages, nk, need_brand, limit, out, kind="r", brx=None):
         md = ii.get("extmetadata", {})
         lic = strip(md.get("LicenseShortName", {}).get("value", ""))
         if not any(x in lic.lower() for x in OK_LIC):
+            continue
+        if ii.get("descriptionurl") in REJECT or t in REJECT:
             continue
         if any(o["w"] == ii.get("descriptionurl") for o in out):
             continue
@@ -146,7 +155,7 @@ def find(name, commons_cat=None, limit=8):
     if commons_cat and len(out) < 4:
         from_category("Category:" + commons_cat, nk, min(limit, len(out) + 4), out, CAT_PROD, "p", brx)
     if len(out) < 3:
-        for kw in ("dress", "shoes", "bag", "vintage"):
+        for kw in ("dress", "shoes", "bag", "jacket"):
             accept(search(f'"{name}" {kw}'), nk, True, min(limit, len(out) + 3), out, "p", brx)
             if len(out) >= 3:
                 break
@@ -178,32 +187,32 @@ def main():
     test = os.environ.get("TEST")
     site = json.load(open(os.path.join(ROOT, "data", "site.json"), encoding="utf-8"))["b"]
     site.sort(key=lambda b: -(b.get("r") or 0))
-    top = int(os.environ.get("TOP", "1800"))
+    top = int(os.environ.get("TOP", "1500"))
     targets = [b for b in site[:top]] + [b for b in site[top:] if b.get("k")]
     if test:
         targets = targets[:int(test)]
     cats = commons_cats([b["i"] for b in targets if b.get("i")])
     print(f"공용 분류 보유 {len(cats)}개", flush=True)
-    vis, hit = {}, 0
-    for i, b in enumerate(targets):
-        names = [n for n in (b.get("e"), b["n"]) if n]
-        got = []
-        for n in names:
+    def work(b):
+        for n in [n for n in (b.get("e"), b["n"]) if n]:
             n = re.sub(r"\s+(AG|SE|S\.p\.A\.|Inc\.?|Ltd\.?|Group|Corporation|Company)$", "", n).strip()
             if len(key(n)) < 3:
                 continue
             got = find(n, cats.get(b.get("i")))
             if got:
-                break
-            time.sleep(0.15)
-        if got:
-            vis[b.get("i") or "n-" + b["n"]] = got
-            hit += 1
-        if test:
-            print(f"{b['n']} / {b.get('e','')}: {len(got)}  {[g['t'][:50] for g in got[:3]]}", flush=True)
-        elif i % 100 == 0:
-            print(f"  {i}/{len(targets)} — 사진 확보 {hit}", flush=True)
-        time.sleep(0.15)
+                return got
+        return []
+    from concurrent.futures import ThreadPoolExecutor
+    vis, hit = {}, 0
+    with ThreadPoolExecutor(4) as ex:
+        for i, (b, got) in enumerate(zip(targets, ex.map(work, targets))):
+            if got:
+                vis[b.get("i") or "n-" + b["n"]] = got
+                hit += 1
+            if test:
+                print(f"{b['n']} / {b.get('e','')}: {len(got)}  {[g['k'] + ':' + g['t'][:45] for g in got[:3]]}", flush=True)
+            elif i % 100 == 0:
+                print(f"  {i}/{len(targets)} — 사진 확보 {hit}", flush=True)
     with open(os.path.join(ROOT, "seed", "visuals.json"), "w", encoding="utf-8") as f:
         json.dump(vis, f, ensure_ascii=False, separators=(",", ":"))
     print(f"완료: {len(targets)}개 중 {hit}개 브랜드 사진 확보")
