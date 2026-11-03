@@ -1,5 +1,7 @@
 name: 브랜드 비주얼(런웨이 사진) 수집
 on:
+  schedule:
+    - cron: "23 19 1 * *"   # 매월 2일 04:23(한국시간) 갱신
   workflow_dispatch:
     inputs:
       test:
@@ -20,6 +22,7 @@ jobs:
       - run: python scripts/collect_visuals.py
         env:
           TEST: ${{ github.event.inputs.test }}
+      - run: python scripts/clean_visuals.py
       - run: python scripts/build_site_data.py
       - if: ${{ github.event.inputs.test == '' }}
         run: |

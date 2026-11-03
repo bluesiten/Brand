@@ -137,6 +137,27 @@
   .dfoot{padding:24px 0 60px;font-size:12px;color:var(--ink-3)}
   .dfoot a{color:var(--ink-2)}
 
+  .looks{display:flex;gap:8px;margin-top:22px}
+  .looks button{flex:0 0 auto;width:74px;aspect-ratio:3/4;border:0;padding:0;background:var(--paper-2);overflow:hidden}
+  .looks img{width:100%;height:100%;object-fit:cover}
+  .credit{position:absolute;right:0;bottom:0;max-width:100%;background:rgba(21,20,19,.62);color:#f4f1ea;font-size:10.5px;padding:4px 8px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .credit a{color:inherit}
+  .gallery{columns:3 260px;column-gap:14px}
+  .gallery figure{break-inside:avoid;margin:0 0 14px;cursor:zoom-in}
+  .gallery img{width:100%;height:auto;background:var(--paper-2)}
+  .gallery figcaption{font-size:11.5px;color:var(--ink-3);padding-top:6px;line-height:1.45}
+  .gallery figcaption b{color:var(--ink-2);font-weight:600}
+  .gallery .kind{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--accent);margin-right:6px}
+  .histphoto{margin:26px 0 0;max-width:720px}
+  .histphoto img{width:100%;max-height:440px;object-fit:cover;filter:grayscale(.25) sepia(.08)}
+  .histphoto figcaption{font-size:11.5px;color:var(--ink-3);margin-top:6px}
+  .wiki p{margin:0 0 14px}
+  .lb{position:fixed;inset:0;z-index:80;background:rgba(15,14,13,.94);display:none;align-items:center;justify-content:center;flex-direction:column;padding:20px}
+  .lb.open{display:flex}
+  .lb img{max-width:100%;max-height:82vh;object-fit:contain}
+  .lb p{color:#d8d1c3;font-size:12px;margin:12px 0 0;text-align:center;max-width:720px}
+  .lb p a{color:#fff}
+  .lb button{position:absolute;top:14px;right:18px;border:0;background:none;color:#fff;font-size:30px;line-height:1}
   footer{border-top:1px solid var(--ink);padding:28px 0 50px;font-size:12px;color:var(--ink-3);line-height:1.8}
   footer b{color:var(--ink);font-family:var(--serif);font-size:15px}
   .loading{padding:80px 0;text-align:center;font-family:var(--serif);color:var(--ink-3)}
@@ -223,6 +244,8 @@
   <div class="wrap" id="dbody"></div>
 </article>
 
+<div class="lb" id="lb" onclick="if(event.target===this)closeLb()"><button onclick="closeLb()" aria-label="닫기">×</button><img id="lbImg" alt=""><p id="lbCap"></p></div>
+
 <script>
 const CATS = ["럭셔리","컨템포러리·디자이너","캐주얼","SPA·패스트패션","스트리트","스포츠","아웃도어","클래식·테일러링","데님·워크웨어","신발","잡화·주얼리","언더웨어·스윔","키즈","미분류"];
 const PAGE = 48;
@@ -238,11 +261,31 @@ const naverUrl = b => "https://search.shopping.naver.com/search/all?sort=date&qu
 const googleShop = b => "https://www.google.com/search?tbm=shop&q=" + encodeURIComponent(b.e || b.n);
 const years = b => b.f ? (b.s ? `${b.f}–${b.x || "?"}` : `Since ${b.f}`) : (b.s ? `~${b.x || "?"}` : "");
 
-function media(b, w, cls) {
-  const typo = `<div class="typo">${esc(b.e || b.n)}</div>`;
-  if (!b.im) return `<div class="${cls}">${typo}</div>`;
-  return `<div class="${cls}${b.lg ? " logo-mode" : ""}">${typo}<img loading="lazy" alt="${esc(b.n)}" src="${img(b.im, w)}" onload="this.previousElementSibling.remove()" onerror="this.remove()"></div>`;
+// 대표 비주얼: 런웨이 사진 → 제품 사진 → 로고 → 글자 표지 (건물 사진은 히스토리에서만)
+function cover(b) {
+  const g = b.g || [];
+  const r = g.find(x => x.k === "r") || g[0];
+  if (r) return { u: r.u, logo: false, ph: r };
+  if (b.lo) return { u: img(b.lo, 600), logo: true };
+  return null;
 }
+function credit(ph) {
+  return ph ? `<span class="credit">사진 ${esc(ph.a)} · <a href="${esc(ph.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(ph.l)}</a></span>` : "";
+}
+function media(b, w, cls, withCredit) {
+  const typo = `<div class="typo">${esc(b.e || b.n)}</div>`;
+  const c = cover(b);
+  if (!c) return `<div class="${cls}">${typo}</div>`;
+  return `<div class="${cls}${c.logo ? " logo-mode" : ""}">${typo}<img loading="lazy" alt="${esc(b.n)}" src="${esc(c.u)}" onload="this.previousElementSibling.remove()" onerror="this.remove()">${withCredit ? credit(c.ph) : ""}</div>`;
+}
+let LB = [];
+function openLb(i) {
+  const ph = LB[i]; if (!ph) return;
+  $("#lbImg").src = ph.u;
+  $("#lbCap").innerHTML = `${esc(ph.t)}<br>사진 ${esc(ph.a)} · ${esc(ph.l)} · <a href="${esc(ph.w)}" target="_blank" rel="noopener">Wikimedia Commons 원본</a>`;
+  $("#lb").classList.add("open");
+}
+function closeLb() { $("#lb").classList.remove("open"); }
 
 /* ---------- 오늘의 브랜드: 날짜마다 바뀌는 고정 선택 ---------- */
 function kstDate(offset = 0) {
@@ -250,7 +293,9 @@ function kstDate(offset = 0) {
   return d.toISOString().slice(0, 10);
 }
 function pickToday(dateStr) {
-  const pool = ALL.filter(b => b.im && !b.lg && (b.r || 0) >= 6 && b.d);
+  let pool = ALL.filter(b => (b.g || []).some(x => x.k === "r") && (b.r || 0) >= 3);
+  if (pool.length < 20) pool = ALL.filter(b => (b.g || []).length);
+  if (pool.length < 20) pool = ALL.filter(b => (b.r || 0) >= 6 && b.d);
   let h = 2166136261;
   for (const ch of dateStr) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
   return pool[Math.abs(h) % pool.length];
@@ -269,7 +314,7 @@ function renderHero() {
   $("#hero").innerHTML = `
     <div class="kicker">Today's Brand · ${ds.replace(/-/g, ".")}</div>
     <div class="hero-grid">
-      ${media(b, 1200, "hero-media")}
+      ${media(b, 1200, "hero-media", true)}
       <div>
         <div class="kicker" style="color:var(--ink-3)">오늘의 브랜드</div>
         <h2>${esc(b.n)}</h2>
@@ -280,6 +325,7 @@ function renderHero() {
           <button class="btn" onclick="openDetail('${esc(keyOf(b))}')">정보 보기 →</button>
           ${b.w ? `<a class="btn ghost" href="${esc(b.w)}" target="_blank" rel="noopener">공식 사이트</a>` : ""}
         </div>
+        ${(b.g || []).length > 1 ? `<div class="looks">${b.g.slice(1, 5).map((x, i) => `<button onclick="LB=today.g;openLb(${i + 1})" aria-label="사진 크게 보기"><img loading="lazy" src="${esc(x.u)}" alt=""></button>`).join("")}</div>` : ""}
         <div class="hero-next">매일 자정, 아카이브에서 새로운 브랜드를 꺼내 소개합니다.</div>
       </div>
     </div>`;
@@ -347,10 +393,9 @@ function openDetail(key, push = true) {
   if (b.f) tl.push(`<li><div class="yr">${b.f}</div><div class="what">${esc(b.n)} 설립${b.fd ? ` — 창립자 ${esc(b.fd)}` : ""}${b.co ? ` · ${esc(b.co)}` : ""}</div></li>`);
   if (b.p) tl.push(`<li><div class="yr" style="font-size:18px">운영·소유</div><div class="what">${esc(b.p)}</div></li>`);
   if (b.s) tl.push(`<li class="end"><div class="yr">${b.x || "?"}</div><div class="what">브랜드 활동 종료 — 아카이브 브랜드</div></li>`);
-  else tl.push(`<li><div class="yr">Now</div><div class="what">현재 활동 중인 브랜드</div></li>`);
   const facts = [
     ["카테고리", b.c], ["국가", b.co], ["설립", b.f], ["창립자", b.fd], ["모회사·소유", b.p],
-    ["상태", b.s ? `사라짐${b.x ? ` (${b.x})` : ""}` : "활동중"],
+    ["상태", b.s ? `사라짐${b.x ? ` (${b.x})` : ""}` : ""],
   ].filter(([, v]) => v);
   const shopCards = [
     b.w && [b.w, "공식 스토어", "브랜드가 직접 운영하는 사이트에서 최신 컬렉션과 신상품을 확인하세요."],
@@ -360,7 +405,7 @@ function openDetail(key, push = true) {
   ].filter(Boolean);
   $("#dbody").innerHTML = `
     <header class="dhead">
-      ${media(b, 1000, "hero-media")}
+      ${media(b, 1000, "hero-media", true)}
       <div>
         <div class="kicker">${b.s ? "Archived Brand" : "Brand Profile"}</div>
         <h1>${esc(b.n)}</h1>
@@ -379,13 +424,22 @@ function openDetail(key, push = true) {
       </div>
     </header>
 
+    ${(b.g || []).length ? `<section class="sec">
+      <div class="kicker">Lookbook · Runway</div>
+      <h2>컬렉션 & 런웨이</h2>
+      <p class="lead">자유 라이선스로 공개된 런웨이·컬렉션·제품 사진이에요. 사진을 누르면 크게 볼 수 있어요.</p>
+      <div class="gallery">${b.g.map((x, i) => `<figure onclick="LB=BY.get('${esc(keyOf(b))}').g;openLb(${i})"><img loading="lazy" src="${esc(x.u)}" alt="${esc(x.t)}"><figcaption><span class="kind">${x.k === "r" ? "RUNWAY" : "PRODUCT"}</span>${esc(x.t)}<br><b>${esc(x.a)}</b> · ${esc(x.l)}</figcaption></figure>`).join("")}</div>
+    </section>` : ""}
+
     <section class="sec">
       <div class="kicker">History</div>
       <h2>브랜드 히스토리</h2>
-      <p class="lead">설립부터 현재까지의 흐름</p>
-      <ol class="timeline">${tl.join("")}</ol>
+      <p class="lead">${b.f ? `${b.f}년 설립 이후의 이야기` : "브랜드가 걸어온 길"}</p>
+      ${tl.length ? `<ol class="timeline">${tl.join("")}</ol>` : ""}
       <div class="wiki" id="wiki"></div>
+      ${b.im ? `<figure class="histphoto"><img loading="lazy" src="${esc(img(b.im, 1100))}" alt="${esc(b.n)} 관련 사진" onerror="this.parentNode.remove()"><figcaption>${esc(b.n)}의 본사·매장 등 관련 사진 — Wikimedia Commons</figcaption></figure>` : ""}
       <dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
+      ${b.w ? `<p style="margin-top:18px;font-size:13px"><a href="${esc(b.w)}" target="_blank" rel="noopener">공식 사이트에서 브랜드 스토리 더 보기 →</a></p>` : ""}
     </section>
 
     ${b.sl && b.sl.length ? `<section class="sec"><div class="kicker">Lines</div><h2>서브 라인</h2><p class="lead">${esc(b.n)} 아래에서 전개되는 라인</p><div class="subs">${b.sl.map(s => `<span class="badge">${esc(s)}</span>`).join("")}</div></section>` : ""}
@@ -415,15 +469,30 @@ async function loadWiki(b) {
   const box = $("#wiki");
   const src = b.kw ? ["ko", b.kw] : b.ew ? ["en", b.ew] : null;
   if (!src) return;
-  box.innerHTML = `<span style="color:var(--ink-3)">위키백과에서 브랜드 이야기를 불러오는 중…</span>`;
-  try {
-    const title = decodeURIComponent(src[1].split("/wiki/")[1]);
-    const r = await fetch(`https://${src[0]}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
-    const j = await r.json();
-    if (!j.extract) throw 0;
+  box.innerHTML = `<span style="color:var(--ink-3)">위키백과에서 브랜드 역사를 불러오는 중…</span>`;
+  const lang = src[0], title = decodeURIComponent(src[1].split("/wiki/")[1]);
+  const done = (paras, label) => {
     if ($("#wiki") !== box) return;
-    box.innerHTML = `${esc(j.extract)}<span class="src">출처: ${src[0] === "ko" ? "한국어" : "영어"} 위키백과 「${esc(j.title)}」 (CC BY-SA) · <a href="${esc(src[1])}" target="_blank" rel="noopener">전체 문서 읽기</a></span>`;
-  } catch (e) { box.innerHTML = ""; }
+    box.innerHTML = paras.map(p => `<p>${esc(p)}</p>`).join("") +
+      `<span class="src">출처: ${lang === "ko" ? "한국어" : "영어"} 위키백과 「${esc(title.replace(/_/g, " "))}」${label} (CC BY-SA) · <a href="${esc(src[1])}" target="_blank" rel="noopener">전체 문서 읽기</a></span>`;
+  };
+  try {
+    // ① 문서 본문에서 '역사/연혁/History' 섹션을 찾아 보여줌
+    const u = `https://${lang}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&formatversion=2&origin=*&titles=${encodeURIComponent(title)}`;
+    const j = await (await fetch(u)).json();
+    const text = j?.query?.pages?.[0]?.extract || "";
+    const m = text.match(/\n==\s*(History|Company history|Brand history|역사|연혁|기업 연혁|브랜드 역사|Background|Early history|Origins)\s*==\s*\n([\s\S]*?)(?=\n==\s[^=]|$)/i);
+    if (m) {
+      const body = m[2].replace(/\n===?\s*(.+?)\s*===?\n/g, "\n").split(/\n+/).map(x => x.trim()).filter(x => x.length > 40);
+      let out = [], n = 0;
+      for (const p of body) { out.push(p); n += p.length; if (n > 1400) break; }
+      if (out.length) return done(out, ` '${m[1]}' 섹션`);
+    }
+    // ② 없으면 문서 요약
+    const intro = text.split(/\n==/)[0].split(/\n+/).map(x => x.trim()).filter(Boolean);
+    if (intro.length) return done(intro.slice(0, 3), "");
+    throw 0;
+  } catch (e) { if ($("#wiki") === box) box.innerHTML = ""; }
 }
 function closeDetail(push = true) {
   const d = $("#detail");
