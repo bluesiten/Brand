@@ -39,30 +39,31 @@ def strip(h):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", h or ""))).strip()
 
 
-def search(q):
-    res = api({"action": "query", "generator": "search", "gsrsearch": q, "gsrnamespace": 6, "gsrlimit": 25,
-               "prop": "imageinfo", "iiprop": "url|size|extmetadata", "iiurlwidth": 900})
-    if os.environ.get("TEST") and not res.get("query"):
-        print("    raw:", str(res)[:200])
-    return sorted(res.get("query", {}).get("pages", []), key=lambda p: p.get("index", 99))
+SHOWY = re.compile(r"(runway|catwalk|fashion show|fashion week|défilé|defile|sfilata|backstage|lookbook|look book|"
+                   r"collection|couture|ready.to.wear|prêt|spring|summer|fall|autumn|winter|resort|cruise|"
+                   r"\b(ss|fw|aw|pf)\s?\d{2}|\b(19|20)\d{2}\s?(ss|fw|aw)\b|menswear|womenswear|campaign)", re.I)
+CAT_OK = re.compile(r"(fashion show|runway|catwalk|collection|fashion week|défilé|sfilata|couture|ready-to-wear|"
+                    r"spring|summer|fall|autumn|winter|resort|cruise|clothing|garments|dresses|footwear|shoes|bags|"
+                    r"products|campaign|lookbook)", re.I)
 
 
-def find(name, limit=6):
-    pages, seen = [], set()
-    for kw in ("runway", "fashion show", "collection"):
-        for p in search(f'"{name}" {kw}'):
-            if p["title"] not in seen:
-                seen.add(p["title"]); pages.append(p)
-        if len(pages) >= 40:
-            break
-        time.sleep(0.1)
-    if os.environ.get("TEST"):
-        print("    titles:", [p["title"][:60] for p in pages[:6]])
-    out, nk = [], key(name)
+def imageinfo(titles):
+    res = api({"action": "query", "titles": "|".join(titles), "prop": "imageinfo",
+               "iiprop": "url|size|extmetadata", "iiurlwidth": 900})
+    return res.get("query", {}).get("pages", [])
+
+
+def members(cat, cmtype, limit=50):
+    res = api({"action": "query", "list": "categorymembers", "cmtitle": cat, "cmtype": cmtype, "cmlimit": limit})
+    return [m["title"] for m in res.get("query", {}).get("categorymembers", [])]
+
+
+def accept(pages, nk, need_brand, limit, out):
     for p in pages:
-        t = p["title"]
-        tl = t.lower()
-        if nk not in key(t) or any(b in tl for b in BAD):
+        t = p["title"]; tl = t.lower()
+        if any(b in tl for b in BAD) or not re.search(r"\.(jpe?g|png|webp)$", tl):
+            continue
+        if need_brand and (nk not in key(t) or not SHOWY.search(t)):
             continue
         ii = (p.get("imageinfo") or [{}])[0]
         if ii.get("width", 0) < 600 or ii.get("height", 0) < 600:
@@ -71,12 +72,72 @@ def find(name, limit=6):
         lic = strip(md.get("LicenseShortName", {}).get("value", ""))
         if not any(x in lic.lower() for x in OK_LIC):
             continue
+        if any(o["w"] == ii.get("descriptionurl") for o in out):
+            continue
         out.append({"u": ii.get("thumburl") or ii.get("url"), "w": ii.get("descriptionurl"),
                     "a": strip(md.get("Artist", {}).get("value", ""))[:80] or "Wikimedia Commons",
                     "l": lic, "t": re.sub(r"^File:|\.\w+$", "", t)[:120],
                     "v": 1 if ii.get("height", 0) > ii.get("width", 0) else 0})
         if len(out) >= limit:
-            break
+            return
+
+
+def from_category(cat, nk, limit, out):
+    """브랜드 공식 분류 → 패션쇼·컬렉션 하위 분류(2단계까지)의 사진"""
+    subs, frontier = [], [cat]
+    for _ in range(2):
+        nxt = []
+        for c in frontier:
+            for sc in members(c, "subcat", 100):
+                if CAT_OK.search(sc) and not any(b in sc.lower() for b in ("store", "shop", "building", "logo", "advert")):
+                    subs.append(sc); nxt.append(sc)
+        frontier = nxt[:15]
+    for sc in subs[:12]:
+        files = members(sc, "file", 20)
+        if files:
+            accept(imageinfo(files[:20]), nk, False, limit, out)
+        if len(out) >= limit:
+            return
+        time.sleep(0.1)
+
+
+def search(q):
+    res = api({"action": "query", "generator": "search", "gsrsearch": q, "gsrnamespace": 6, "gsrlimit": 30,
+               "prop": "imageinfo", "iiprop": "url|size|extmetadata", "iiurlwidth": 900})
+    return sorted(res.get("query", {}).get("pages", []), key=lambda p: p.get("index", 99))
+
+
+def find(name, commons_cat=None, limit=8):
+    out, nk = [], key(name)
+    if commons_cat:
+        from_category("Category:" + commons_cat, nk, limit, out)
+    if len(out) < limit:
+        for kw in ("runway", "fashion show", "fashion week", "collection"):
+            accept(search(f'"{name}" {kw}'), nk, True, limit, out)
+            if len(out) >= limit:
+                break
+            time.sleep(0.1)
+    return out
+
+
+def commons_cats(qids):
+    """위키데이터 P373(공용 분류) 일괄 조회"""
+    out = {}
+    for i in range(0, len(qids), 50):
+        part = qids[i:i + 50]
+        try:
+            r = S.get("https://www.wikidata.org/w/api.php", params={"action": "wbgetentities", "ids": "|".join(part),
+                      "props": "claims", "format": "json"}, timeout=60).json()
+        except Exception:
+            continue
+        for q, e in r.get("entities", {}).items():
+            c = e.get("claims", {}).get("P373")
+            if c:
+                try:
+                    out[q] = c[0]["mainsnak"]["datavalue"]["value"]
+                except (KeyError, IndexError):
+                    pass
+        time.sleep(0.3)
     return out
 
 
@@ -88,6 +149,8 @@ def main():
     targets = [b for b in site[:top]] + [b for b in site[top:] if b.get("k")]
     if test:
         targets = targets[:int(test)]
+    cats = commons_cats([b["i"] for b in targets if b.get("i")])
+    print(f"공용 분류 보유 {len(cats)}개", flush=True)
     vis, hit = {}, 0
     for i, b in enumerate(targets):
         names = [n for n in (b.get("e"), b["n"]) if n]
@@ -96,7 +159,7 @@ def main():
             n = re.sub(r"\s+(AG|SE|S\.p\.A\.|Inc\.?|Ltd\.?|Group|Corporation|Company)$", "", n).strip()
             if len(key(n)) < 3:
                 continue
-            got = find(n)
+            got = find(n, cats.get(b.get("i")))
             if got:
                 break
             time.sleep(0.15)
