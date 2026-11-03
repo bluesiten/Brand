@@ -11,7 +11,7 @@ API = "https://commons.wikimedia.org/w/api.php"
 S = requests.Session()
 S.headers["User-Agent"] = "DS3-brand-archive/0.1 (https://github.com/bluesiten/Brand)"
 KEYS = ["runway", "fashion show", "fashion week", "collection", "catwalk", "défilé", "sfilata", "lookbook"]
-BAD = ("naked", "nude", "crotch", "topless", "nsfw", "breast", "erotic", "sexy", "upskirt", "bikini contest",
+BAD = ("aerospatiale", "western electric", "nike ajax", "nike hercules", "eurocopter", "naked", "nude", "crotch", "topless", "nsfw", "breast", "erotic", "sexy", "upskirt", "bikini contest",
        "helicopter", "aircraft", "missile", "army", "navy", "air force", "rocket", "locomotive", "warship",
        "lighter", "stadium", "match", " vs ", "logo", "store", "shop", "boutique", "building", "headquarter", "factory", "flagship", "sign",
        "billboard", "advert", "map", "chart", "svg", "icon", "portrait of", "grave", "museum", "street view")
