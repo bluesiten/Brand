@@ -59,12 +59,32 @@ def members(cat, cmtype, limit=50):
     return [m["title"] for m in res.get("query", {}).get("categorymembers", [])]
 
 
-def accept(pages, nk, need_brand, limit, out, kind="r"):
+PRODUCT = re.compile(r"\b(dress|gown|shoes?|sneakers?|boots?|bag|handbag|purse|coat|jacket|jeans|denim|scarf|"
+                     r"watch|necklace|bracelet|ring|sunglasses|eyewear|trainers?|sandals?|heels|suit|blouse|shirt|"
+                     r"knit|sweater|hat|cap|ensemble|outfit|look|vintage|archive|exhibition|museum)\b", re.I)
+
+
+def brand_rx(name):
+    """브랜드명을 단어 경계로 찾는 정규식 (예: Bulgari ≠ Bulgarian, Nike ≠ Nike Hercules 미사일은 제품어로 거름)"""
+    n = unicodedata.normalize("NFKD", name)
+    n = "".join(c for c in n if not unicodedata.combining(c))
+    words = re.findall(r"[A-Za-z0-9]+", n)
+    if not words:
+        return None
+    return re.compile(r"(?<![A-Za-z0-9])" + r"[\W_]*".join(map(re.escape, words)) + r"(?![A-Za-z0-9])", re.I)
+
+
+def accept(pages, nk, need_brand, limit, out, kind="r", brx=None):
     for p in pages:
         t = p["title"]; tl = t.lower()
+        plain = "".join(c for c in unicodedata.normalize("NFKD", t) if not unicodedata.combining(c))
         if any(b in tl for b in BAD) or not re.search(r"\.(jpe?g|png|webp)$", tl):
             continue
-        if need_brand and (nk not in key(t) or not SHOWY.search(t)):
+        if brx is None or not brx.search(plain):
+            continue
+        if kind == "r" and not SHOWY.search(t):
+            continue
+        if kind == "p" and not PRODUCT.search(t):
             continue
         ii = (p.get("imageinfo") or [{}])[0]
         if ii.get("width", 0) < 600 or ii.get("height", 0) < 600:
@@ -83,7 +103,7 @@ def accept(pages, nk, need_brand, limit, out, kind="r"):
             return
 
 
-def from_category(cat, nk, limit, out, rx, kind):
+def from_category(cat, nk, limit, out, rx, kind, brx=None):
     """브랜드 공식 분류 → 조건(rx)에 맞는 하위 분류(2단계까지)의 사진"""
     subs, frontier = [], [cat]
     for _ in range(2):
@@ -99,7 +119,7 @@ def from_category(cat, nk, limit, out, rx, kind):
     for sc in subs[:12]:
         files = members(sc, "file", 20)
         if files:
-            accept(imageinfo(files[:20]), nk, False, limit, out, kind)
+            accept(imageinfo(files[:20]), nk, False, limit, out, kind, brx)
         if len(out) >= limit:
             return
         time.sleep(0.1)
@@ -113,17 +133,23 @@ def search(q):
 
 def find(name, commons_cat=None, limit=8):
     out, nk = [], key(name)
+    brx = brand_rx(name)
     # ① 공용 분류 안의 패션쇼·시즌 컬렉션 ② 제목에 런웨이·시즌 표기가 있는 검색 결과 ③ 공용 분류 안의 제품 사진
     if commons_cat:
-        from_category("Category:" + commons_cat, nk, limit, out, CAT_SHOW, "r")
+        from_category("Category:" + commons_cat, nk, limit, out, CAT_SHOW, "r", brx)
     if len(out) < limit:
         for kw in ("runway", "fashion show", "fashion week", "collection"):
-            accept(search(f'"{name}" {kw}'), nk, True, limit, out, "r")
+            accept(search(f'"{name}" {kw}'), nk, True, limit, out, "r", brx)
             if len(out) >= limit:
                 break
             time.sleep(0.1)
     if commons_cat and len(out) < 4:
-        from_category("Category:" + commons_cat, nk, min(limit, len(out) + 4), out, CAT_PROD, "p")
+        from_category("Category:" + commons_cat, nk, min(limit, len(out) + 4), out, CAT_PROD, "p", brx)
+    if len(out) < 3:
+        for kw in ("dress", "shoes", "bag", "vintage"):
+            accept(search(f'"{name}" {kw}'), nk, True, min(limit, len(out) + 3), out, "p", brx)
+            if len(out) >= 3:
+                break
     return out
 
 
