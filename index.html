@@ -342,7 +342,7 @@ const BY = new Map();
 function openDetail(key, push = true) {
   const b = BY.get(key);
   if (!b) return;
-  if (push) history.pushState({ b: key }, "", "#/brand/" + key);
+  if (push) { try { history.pushState({ b: key }, "", "#/brand/" + key); } catch (e) {} }
   const tl = [];
   if (b.f) tl.push(`<li><div class="yr">${b.f}</div><div class="what">${esc(b.n)} 설립${b.fd ? ` — 창립자 ${esc(b.fd)}` : ""}${b.co ? ` · ${esc(b.co)}` : ""}</div></li>`);
   if (b.p) tl.push(`<li><div class="yr" style="font-size:18px">운영·소유</div><div class="what">${esc(b.p)}</div></li>`);
@@ -431,7 +431,7 @@ function closeDetail(push = true) {
   d.setAttribute("aria-hidden", "true");
   document.body.style.overflow = "";
   document.title = "브랜드의 모든 것 — 패션 브랜드 아카이브";
-  if (push && location.hash) history.pushState({}, "", location.pathname);
+  if (push && location.hash) { try { history.pushState({}, "", location.pathname); } catch (e) {} }
 }
 function goHome() { closeDetail(); window.scrollTo({ top: 0, behavior: "smooth" }); }
 function share() {
