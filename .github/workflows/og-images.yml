@@ -1,0 +1,26 @@
+name: 공식 사이트 대표 이미지 수집
+on:
+  schedule:
+    - cron: "41 19 2 * *"   # 매월 3일 04:41(한국시간)
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  og:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/collect_og.py
+      - run: python scripts/build_site_data.py
+      - run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add seed/og_images.json data/site.json
+          git diff --cached --quiet || git commit -m "공식 사이트 대표 이미지 갱신"
+          git pull --rebase
+          git push

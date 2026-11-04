@@ -30,6 +30,8 @@ def main():
     ov = load_overrides()
     vpath = os.path.join(ROOT, "seed", "visuals.json")
     visuals = json.load(open(vpath, encoding="utf-8")) if os.path.exists(vpath) else {}
+    opath = os.path.join(ROOT, "seed", "og_images.json")
+    ogs = json.load(open(opath, encoding="utf-8")) if os.path.exists(opath) else {}
     out = []
     for b in src["brands"]:
         if b.get("kind") != "브랜드":
@@ -52,6 +54,7 @@ def main():
             "im": b.get("image") or "",      # 위키데이터 대표 사진(건물·매장 등) → 히스토리 섹션용
             "lo": b.get("logo") or "",
             "g": visuals.get(b.get("id") or "n-" + b["name"], []),  # 런웨이·제품 사진(자유 라이선스)
+            "og": (ogs.get(b.get("id") or "n-" + b["name"]) or {}).get("u", ""),  # 공식 사이트 대표 이미지(원본 주소)
             "kw": b.get("kowiki") or "",
             "ew": b.get("enwiki") or "",
             "sl": b.get("sublines") or [],
