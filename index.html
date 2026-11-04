@@ -228,7 +228,8 @@
     <div class="wrap">
       <b>브랜드의 모든 것</b><br>
       브랜드 정보: Wikidata(CC0) · 위키백과(CC BY-SA) · 각 브랜드 공식 사이트<br>
-      이미지: Wikimedia Commons 자유 라이선스 파일 · 상표와 로고의 권리는 각 소유자에게 있습니다.<br>
+      이미지: Wikimedia Commons 자유 라이선스 파일(촬영자 표기) · 각 브랜드 공식 사이트 대표 이미지(원본 링크 표시)<br>
+      상표·로고·공식 이미지의 권리는 각 브랜드에 있으며, 요청 시 즉시 내립니다.<br>
       <span id="updated"></span>
     </div>
   </footer>
@@ -261,28 +262,41 @@ const naverUrl = b => "https://search.shopping.naver.com/search/all?sort=date&qu
 const googleShop = b => "https://www.google.com/search?tbm=shop&q=" + encodeURIComponent(b.e || b.n);
 const years = b => b.f ? (b.s ? `${b.f}–${b.x || "?"}` : `Since ${b.f}`) : (b.s ? `~${b.x || "?"}` : "");
 
-// 대표 비주얼: 런웨이 사진 → 제품 사진 → 로고 → 글자 표지 (건물 사진은 히스토리에서만)
+// 대표 비주얼: 런웨이 사진 → 공식 사이트 대표 이미지 → 제품 사진 → 로고 → 글자 표지 (건물 사진은 히스토리에서만)
 function cover(b) {
   const g = b.g || [];
-  const r = g.find(x => x.k === "r") || g[0];
-  if (r) return { u: r.u, logo: false, ph: r };
+  const r = g.find(x => x.k === "r");
+  if (r) return { u: r.u, ph: r };
+  if (b.og) return { u: b.og, off: true };
+  if (g[0]) return { u: g[0].u, ph: g[0] };
   if (b.lo) return { u: img(b.lo, 600), logo: true };
   return null;
 }
-function credit(ph) {
-  return ph ? `<span class="credit">사진 ${esc(ph.a)} · <a href="${esc(ph.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(ph.l)}</a></span>` : "";
+function credit(c, b) {
+  if (c && c.ph) return `<span class="credit">사진 ${esc(c.ph.a)} · <a href="${esc(c.ph.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(c.ph.l)}</a></span>`;
+  if (c && c.off && b.w) return `<span class="credit">이미지 · <a href="${esc(b.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(b.e || b.n)} 공식 사이트</a></span>`;
+  return "";
+}
+// 갤러리용: 공식 이미지 + 자유 라이선스 사진
+function photos(b) {
+  const list = (b.g || []).slice();
+  if (b.og) list.splice(list.some(x => x.k === "r") ? 1 : 0, 0, { u: b.og, k: "o", t: `${b.e || b.n} 공식 사이트 대표 이미지`, a: `${b.e || b.n}`, l: "공식 사이트", w: b.w });
+  return list;
 }
 function media(b, w, cls, withCredit) {
   const typo = `<div class="typo">${esc(b.e || b.n)}</div>`;
   const c = cover(b);
   if (!c) return `<div class="${cls}">${typo}</div>`;
-  return `<div class="${cls}${c.logo ? " logo-mode" : ""}">${typo}<img loading="lazy" alt="${esc(b.n)}" src="${esc(c.u)}" onload="this.previousElementSibling.remove()" onerror="this.remove()">${withCredit ? credit(c.ph) : ""}</div>`;
+  return `<div class="${cls}${c.logo ? " logo-mode" : ""}">${typo}<img loading="lazy" alt="${esc(b.n)}" src="${esc(c.u)}"${c.off ? ' referrerpolicy="no-referrer"' : ""} onload="this.previousElementSibling.remove()" onerror="this.nextElementSibling&&this.nextElementSibling.remove();this.remove()">${withCredit ? credit(c, b) : ""}</div>`;
 }
 let LB = [];
 function openLb(i) {
   const ph = LB[i]; if (!ph) return;
+  $("#lbImg").referrerPolicy = ph.k === "o" ? "no-referrer" : "";
   $("#lbImg").src = ph.u;
-  $("#lbCap").innerHTML = `${esc(ph.t)}<br>사진 ${esc(ph.a)} · ${esc(ph.l)} · <a href="${esc(ph.w)}" target="_blank" rel="noopener">Wikimedia Commons 원본</a>`;
+  $("#lbCap").innerHTML = ph.k === "o"
+    ? `${esc(ph.t)}<br>이미지 권리: ${esc(ph.a)} · <a href="${esc(ph.w)}" target="_blank" rel="noopener">공식 사이트 바로 가기</a>`
+    : `${esc(ph.t)}<br>사진 ${esc(ph.a)} · ${esc(ph.l)} · <a href="${esc(ph.w)}" target="_blank" rel="noopener">Wikimedia Commons 원본</a>`;
   $("#lb").classList.add("open");
 }
 function closeLb() { $("#lb").classList.remove("open"); }
@@ -293,8 +307,8 @@ function kstDate(offset = 0) {
   return d.toISOString().slice(0, 10);
 }
 function pickToday(dateStr) {
-  let pool = ALL.filter(b => (b.g || []).some(x => x.k === "r") && (b.r || 0) >= 3);
-  if (pool.length < 20) pool = ALL.filter(b => (b.g || []).length);
+  let pool = ALL.filter(b => ((b.g || []).some(x => x.k === "r") || b.og) && (b.r || 0) >= 3 && b.d);
+  if (pool.length < 20) pool = ALL.filter(b => (b.g || []).length || b.og);
   if (pool.length < 20) pool = ALL.filter(b => (b.r || 0) >= 6 && b.d);
   let h = 2166136261;
   for (const ch of dateStr) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
@@ -325,7 +339,7 @@ function renderHero() {
           <button class="btn" onclick="openDetail('${esc(keyOf(b))}')">정보 보기 →</button>
           ${b.w ? `<a class="btn ghost" href="${esc(b.w)}" target="_blank" rel="noopener">공식 사이트</a>` : ""}
         </div>
-        ${(b.g || []).length > 1 ? `<div class="looks">${b.g.slice(1, 5).map((x, i) => `<button onclick="LB=today.g;openLb(${i + 1})" aria-label="사진 크게 보기"><img loading="lazy" src="${esc(x.u)}" alt=""></button>`).join("")}</div>` : ""}
+        ${photos(b).length > 1 ? `<div class="looks">${photos(b).slice(1, 5).map((x, i) => `<button onclick="LB=photos(today);openLb(${i + 1})" aria-label="사진 크게 보기"><img loading="lazy" src="${esc(x.u)}"${x.k === "o" ? ' referrerpolicy="no-referrer"' : ""} alt="" onerror="this.parentNode.remove()"></button>`).join("")}</div>` : ""}
         <div class="hero-next">매일 자정, 아카이브에서 새로운 브랜드를 꺼내 소개합니다.</div>
       </div>
     </div>`;
@@ -424,11 +438,11 @@ function openDetail(key, push = true) {
       </div>
     </header>
 
-    ${(b.g || []).length ? `<section class="sec">
+    ${photos(b).length ? `<section class="sec">
       <div class="kicker">Lookbook · Runway</div>
       <h2>컬렉션 & 런웨이</h2>
-      <p class="lead">자유 라이선스로 공개된 런웨이·컬렉션·제품 사진이에요. 사진을 누르면 크게 볼 수 있어요.</p>
-      <div class="gallery">${b.g.map((x, i) => `<figure onclick="LB=BY.get('${esc(keyOf(b))}').g;openLb(${i})"><img loading="lazy" src="${esc(x.u)}" alt="${esc(x.t)}"><figcaption><span class="kind">${x.k === "r" ? "RUNWAY" : "PRODUCT"}</span>${esc(x.t)}<br><b>${esc(x.a)}</b> · ${esc(x.l)}</figcaption></figure>`).join("")}</div>
+      <p class="lead">브랜드 공식 사이트의 대표 이미지와 자유 라이선스로 공개된 런웨이·컬렉션·제품 사진이에요. 누르면 크게 볼 수 있어요.</p>
+      <div class="gallery">${photos(b).map((x, i) => `<figure onclick="LB=photos(BY.get('${esc(keyOf(b))}'));openLb(${i})"><img loading="lazy" src="${esc(x.u)}"${x.k === "o" ? ' referrerpolicy="no-referrer"' : ""} alt="${esc(x.t)}" onerror="this.parentNode.remove()"><figcaption><span class="kind">${x.k === "r" ? "RUNWAY" : x.k === "o" ? "OFFICIAL" : "PRODUCT"}</span>${esc(x.t)}<br><b>${esc(x.a)}</b> · ${esc(x.l)}</figcaption></figure>`).join("")}</div>
     </section>` : ""}
 
     <section class="sec">
